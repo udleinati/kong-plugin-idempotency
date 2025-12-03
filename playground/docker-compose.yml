@@ -1,0 +1,112 @@
+version: '3.7'
+
+networks:
+  playground-net:
+    external: false
+
+services:
+  playground-postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: kong
+      POSTGRES_PASSWORD: sql
+    restart: on-failure
+    deploy:
+      restart_policy:
+        condition: on-failure
+    stdin_open: true
+    tty: true
+    networks:
+      - playground-net
+
+  playground-redis:
+    image: redis:8-alpine
+    restart: on-failure
+    deploy:
+      restart_policy:
+        condition: on-failure
+    networks:
+      - playground-net
+    ports:
+      - "6379:6379/tcp"
+
+  playground-kong-migrations:
+    image: kong:3.9
+    entrypoint:
+      [
+        "sh",
+        "-c",
+        "kong migrations bootstrap && kong migrations up"
+      ]
+    depends_on:
+      - playground-postgres
+    environment:
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: playground-postgres
+      KONG_PG_USER: postgres
+      KONG_PG_PASSWORD: sql
+      KONG_PG_DATABASE: kong
+    restart: on-failure
+    deploy:
+      restart_policy:
+        condition: on-failure
+    networks:
+      - playground-net
+
+  playground-kong:
+    build:
+      context: ./custom-kong-image
+    image: playground-kong:latest
+    depends_on:
+      - playground-postgres
+    environment:
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_LISTEN: '0.0.0.0:8001'
+      KONG_DATABASE: postgres
+      KONG_PG_DATABASE: kong
+      KONG_PG_HOST: playground-postgres
+      KONG_PG_USER: postgres
+      KONG_PG_PASSWORD: sql
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_PLUGINS: bundled, idempotency
+    volumes:
+      - ../kong/plugins/idempotency:/usr/local/share/lua/5.1/kong/plugins/idempotency:ro
+    restart: on-failure
+    deploy:
+      restart_policy:
+        condition: on-failure
+    networks:
+      - playground-net
+    ports:
+      - "8000:8000/tcp"
+      - "127.0.0.1:8001:8001/tcp"
+
+  playground-service:
+    image: node:24-alpine
+    entrypoint: [ "node", "/app/service.js" ]
+    depends_on:
+      - playground-kong
+    environment:
+      PORT: 3200
+    volumes:
+      - ./app:/app:ro
+    networks:
+      - playground-net
+    ports:
+      - 3200:3200
+
+  playground-load:
+    image: node:24-alpine
+    entrypoint: [ "node", "/app/_load.js" ]
+    depends_on:
+      - playground-kong
+    volumes:
+      - ./app/_load.js:/app/_load.js:ro
+    restart: on-failure
+    deploy:
+      restart_policy:
+        condition: on-failure
+    networks:
+      - playground-net

@@ -23,7 +23,7 @@ function _M.connection(conf)
     end
   end
 
-  client = redis.connect(conf.redis_host, conf.redis_port)
+  local client = redis.connect(conf.redis_host, conf.redis_port)
   _M.client = client
 
   return _M.client
