@@ -2,7 +2,7 @@ package = "kong-plugin-idempotency"
 version = "1.1.0-1"
 
 source = {
-  url = "git://github.com/lojaintegrada/kong-plugin-idempotency",
+  url = "git://github.com/udleinati/kong-plugin-idempotency",
   tag = "1.1.0",
 }
 
@@ -10,7 +10,7 @@ supported_platforms = {"linux", "macosx"}
 
 description = {
    detailed = "A Kong plugin that enables idempotency to HTTP POST.",
-   homepage = "git://github.com/lojaintegrada/kong-plugin-idempotency",
+   homepage = "git://github.com/udleinati/kong-plugin-idempotency",
    license = "MIT"
 }
 
