@@ -34,7 +34,3 @@ $ curl -X POST http://kong:8001/apis/{api}/plugins \
 | `config.redis_port` | [required] | Port of redis server. |
 | `config.redis_cache_time` | [required] | Caches expiration time in seconds. |
 | `config.is_required` | false | Define if idempotency is required, when is `false` it is possible to send request without `x-idempotency-key`. |
-
-## Author
-
-David Washington - [GitHub](https://github.com/davidwshg "GitHub")
