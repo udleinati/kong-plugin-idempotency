@@ -56,7 +56,7 @@ services:
   playground-kong:
     build:
       context: ./custom-kong-image
-    image: playground-kong:1
+    image: playground-kong:latest
     depends_on:
       - playground-postgres
     environment:

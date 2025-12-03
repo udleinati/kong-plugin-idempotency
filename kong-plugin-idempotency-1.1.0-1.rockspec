@@ -1,21 +1,22 @@
 package = "kong-plugin-idempotency"
-version = "1.0.3-1"
+version = "1.1.0-1"
 
 source = {
   url = "git://github.com/lojaintegrada/kong-plugin-idempotency",
-  tag = "1.0.3",
+  tag = "1.1.0",
 }
 
 supported_platforms = {"linux", "macosx"}
 
 description = {
    detailed = "A Kong plugin that enables idempotency to HTTP POST.",
-   homepage = "git://github.com/lojaintegrada/kong-plugin-idempotency"
+   homepage = "git://github.com/lojaintegrada/kong-plugin-idempotency",
+   license = "MIT"
 }
 
 dependencies = {
   "lua >= 5.1",
-  "redis-lua"
+  "redis-lua == 2.0.4-1"
 }
 
 build = {
