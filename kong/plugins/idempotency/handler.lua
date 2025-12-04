@@ -3,7 +3,7 @@ local response = require "kong.plugins.idempotency.response"
 local cache = require "kong.plugins.idempotency.cache"
 
 local Idempotency = {
-  VERSION = "1.1.1",
+  VERSION = "1.1.2",
   PRIORITY = -1
 }
 
