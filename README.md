@@ -4,7 +4,7 @@ A Kong plugin that enables idempotency to HTTP POST.
 
 ## Description
 
-This plugin set a `nx` key on redis database for each `x-idempotency-key` came from the client, when the same `x-idempotency-key` came in other request throws error because the keys is already set on redis.
+This plugin set a `nx` key on redis database for each `X-Idempotency-Key` came from the client, when the same `X-Idempotency-Key` came in other request throws error because the keys is already set on redis.
 
 ## Installation
 
@@ -30,7 +30,12 @@ $ curl -X POST http://kong:8001/apis/{api}/plugins \
 
 | Parameter | default | description |
 | ---       | ---     | ---         |
-| `config.redis_host` | [required] | Host of redis server. |
-| `config.redis_port` | [required] | Port of redis server. |
-| `config.redis_cache_time` | [required] | Caches expiration time in seconds. |
-| `config.is_required` | false | Define if idempotency is required, when is `false` it is possible to send request without `x-idempotency-key`. |
+| `config.is_required` | false | Define if idempotency is required, when is `false` it is possible to send request without `X-Idempotency-Key`. |
+| `config.redis_host` |  | Mandatory. |
+| `config.redis_port` | 6379 | |
+| `config.redis_password` | | |
+| `config.redis_username` | | |
+| `config.redis_ssl` | false | |
+| `config.redis_ssl_verify` | false | |
+| `config.redis_timeout` | 2000 | |
+| `config.redis_database` | 0 | |
