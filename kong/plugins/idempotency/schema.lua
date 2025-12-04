@@ -8,10 +8,18 @@ return {
     { config = {
       type = "record",
       fields = {
-        { redis_host = { type = "string" }, },
-        { redis_port = { type = "number" }, },
-        { redis_cache_time = { type = "number" }, },
         { is_required = { type = "boolean", default = false, }, },
+        { redis_host = typedefs.host },
+        { redis_port = typedefs.port({ default = 6379 }), },
+        { redis_cache_time = { type = "number" }, },
+        { redis_password = { type = "string", len_min = 0, referenceable = true }, },
+        { redis_username = { type = "string", referenceable = true }, },
+        { redis_ssl = { type = "boolean", required = true, default = false, }, },
+        { redis_ssl_verify = { type = "boolean", required = true, default = false }, },
+        { redis_database = { type = "integer", default = 0 }, },
+        { redis_server_name = typedefs.sni },
+        { redis_timeout = { type = "number", default = 2000, }, },
+        { redis_prefix = { type = "string", default = "kong-idempotency-plugin"}, },
       },
     }, },
   }
