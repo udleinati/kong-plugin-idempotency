@@ -4,7 +4,7 @@ local cache = require "kong.plugins.idempotency.cache"
 local prefix = 'kong-idempotency-plugin'
 
 local Idempotency = {
-  VERSION = "1.1.0",
+  VERSION = "1.1.1",
   PRIORITY = -1
 }
 
