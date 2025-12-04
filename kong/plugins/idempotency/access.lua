@@ -46,7 +46,14 @@ function _M.execute(conf, version, prefix, client)
 
   local response = json.decode(cache)
 
+  -- restore headers from the original response
+  for name, value in pairs(response.headers or {}) do
+    kong.response.set_header(name, value)
+  end
+
   kong.response.set_header('x-idempotency-status', 'completed')
+
+  -- restore status and body from the original response
   kong.response.exit(response.status, response.body)
 end
 

@@ -11,9 +11,6 @@ function _M.execute(conf, version, prefix, client)
     return
   end
 
-  local body = kong.service.response.get_raw_body()
-  local status = kong.response.get_status()
-
   kong.response.set_header('x-idempotency-status', 'completed')
 
   local prefix_redis_key = string.format(
@@ -24,7 +21,16 @@ function _M.execute(conf, version, prefix, client)
     idempotency_key
   )
 
-  client:set(string.format('%s:%s-response', prefix_redis_key, idempotency_key), json.encode({ status = status, body = body }), 'ex', conf.redis_cache_time)
+  local payload = {
+    headers = kong.response.get_headers(),
+    status = kong.service.response.get_status(),
+    body = kong.service.response.get_raw_body()
+  }
+
+  payload.headers["connection"] = nil
+  payload.headers["x-idempotency-status"] = nil
+
+  client:set(string.format('%s:%s-response', prefix_redis_key, idempotency_key), json.encode(payload), 'ex', conf.redis_cache_time)
 end
 
 return _M
