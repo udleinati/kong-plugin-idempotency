@@ -59,18 +59,18 @@ describe("idempotency keys", function()
   end)
 
   describe("lock_key()", function()
-    it("appends the idempotency key to the prefix", function()
+    it("uses a :lock: discriminator before the idempotency key", function()
       assert.equal(
-        "kong-idempotency-plugin:anonymous:api.test:/orders:POST:abc-123",
+        "kong-idempotency-plugin:anonymous:api.test:/orders:POST:lock:abc-123",
         keys.lock_key(conf(), req(), "abc-123")
       )
     end)
   end)
 
   describe("response_key()", function()
-    it("appends the idempotency key with a -response suffix", function()
+    it("uses a :resp: discriminator before the idempotency key", function()
       assert.equal(
-        "kong-idempotency-plugin:anonymous:api.test:/orders:POST:abc-123-response",
+        "kong-idempotency-plugin:anonymous:api.test:/orders:POST:resp:abc-123",
         keys.response_key(conf(), req(), "abc-123")
       )
     end)
@@ -79,6 +79,14 @@ describe("idempotency keys", function()
       assert.not_equal(
         keys.lock_key(conf(), req(), "k"),
         keys.response_key(conf(), req(), "k")
+      )
+    end)
+
+    it("a lock key never collides with a response key ending in -response", function()
+      -- The bug: lock_key("x-response") used to equal response_key("x").
+      assert.not_equal(
+        keys.lock_key(conf(), req(), "x-response"),
+        keys.response_key(conf(), req(), "x")
       )
     end)
   end)

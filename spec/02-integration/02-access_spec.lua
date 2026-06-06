@@ -11,10 +11,10 @@ local HOST = "echo.test"
 -- Mirror the key format from keys.lua so we can assert/seed Redis directly.
 -- No auth here, so the consumer scope is "anonymous".
 local function lock_key(path, idem)
-  return PREFIX .. ":anonymous:" .. HOST .. ":" .. path .. ":POST:" .. idem
+  return PREFIX .. ":anonymous:" .. HOST .. ":" .. path .. ":POST:lock:" .. idem
 end
 local function response_key(path, idem)
-  return lock_key(path, idem) .. "-response"
+  return PREFIX .. ":anonymous:" .. HOST .. ":" .. path .. ":POST:resp:" .. idem
 end
 
 local function redis_connect()

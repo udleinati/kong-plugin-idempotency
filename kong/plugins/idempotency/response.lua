@@ -57,7 +57,10 @@ function _M.execute(conf, version, client)
   local response_key = keys.response_key(conf, req, idempotency_key)
 
   local ok, err = client:set(response_key, cjson.encode(payload), "EX", conf.redis_cache_time)
-  if not ok then
+  if ok then
+    -- Tell the log phase the response was persisted, so it keeps the lock.
+    kong.ctx.plugin.cached = true
+  else
     kong.log.err("idempotency: failed to cache response in Redis: ", err)
   end
 

@@ -4,7 +4,7 @@ local mocks = require "spec.01-unit.support.mocks"
 -- how it wires them together.
 local function build(opts)
   opts = opts or {}
-  local calls = { access = {}, response = {}, connection = 0 }
+  local calls = { access = {}, response = {}, connection = 0, del = {}, release = {} }
 
   local fake_access = {
     execute = function(conf, version, client)
@@ -20,6 +20,12 @@ local function build(opts)
     connection = function()
       calls.connection = calls.connection + 1
       return "redis-client"
+    end,
+    del = function(client, key)
+      calls.del[#calls.del + 1] = { client = client, key = key }
+    end,
+    release = function(client)
+      calls.release[#calls.release + 1] = client
     end,
   }
 
@@ -78,5 +84,33 @@ describe("idempotency handler", function()
     assert.equal(1, #calls.response)
     assert.equal(conf, calls.response[1].conf)
     assert.equal("redis-client", calls.response[1].client)
+  end)
+
+  describe(":log lock cleanup", function()
+    it("releases an orphaned lock when the original never cached a response", function()
+      local handler, calls = build({ plugin_ctx = { store = true, cached = nil, lock_key = "the-lock" } })
+      handler:log({ redis = {} })
+
+      assert.equal(1, calls.connection)
+      assert.equal(1, #calls.del)
+      assert.equal("the-lock", calls.del[1].key)
+      assert.equal(1, #calls.release)
+    end)
+
+    it("keeps the lock (no Redis round-trip) when the response was cached", function()
+      local handler, calls = build({ plugin_ctx = { store = true, cached = true, lock_key = "the-lock" } })
+      handler:log({ redis = {} })
+
+      assert.equal(0, calls.connection)
+      assert.equal(0, #calls.del)
+    end)
+
+    it("does nothing for duplicates / passthrough (store not set)", function()
+      local handler, calls = build({ plugin_ctx = {} })
+      handler:log({ redis = {} })
+
+      assert.equal(0, calls.connection)
+      assert.equal(0, #calls.del)
+    end)
   end)
 end)

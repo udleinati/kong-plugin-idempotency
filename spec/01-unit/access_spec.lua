@@ -117,11 +117,13 @@ describe("idempotency access", function()
       ctx.access.execute(conf({ redis_cache_time = 120 }), VERSION, ctx.client)
 
       local set = ctx.red.calls.set[1]
-      assert.equal("kong-idempotency-plugin:anonymous:api.test:/orders:POST:k1", set.key)
+      assert.equal("kong-idempotency-plugin:anonymous:api.test:/orders:POST:lock:k1", set.key)
       assert.equal("1", set.value)
       assert.same({ "EX", 120, "NX" }, set.args)
 
       assert.is_true(ctx.plugin_ctx.store)
+      -- the lock key is remembered for the log-phase cleanup
+      assert.equal(set.key, ctx.plugin_ctx.lock_key)
       assert.is_nil(ctx.recorded.exit)
       assert.equal(1, #ctx.cache_calls.release)
     end)
@@ -132,7 +134,7 @@ describe("idempotency access", function()
       local ctx = build({ request = request, redis = { set_return = "OK" } })
       ctx.access.execute(conf(), VERSION, ctx.client)
 
-      assert.equal("kong-idempotency-plugin:c-1:api.test:/orders:POST:k1", ctx.red.calls.set[1].key)
+      assert.equal("kong-idempotency-plugin:c-1:api.test:/orders:POST:lock:k1", ctx.red.calls.set[1].key)
     end)
   end)
 
@@ -160,8 +162,18 @@ describe("idempotency access", function()
       assert.equal("created", ctx.recorded.exit.body)
       assert.equal("42", ctx.recorded.response_headers["x-resource-id"])
       assert.equal("completed", ctx.recorded.response_headers["X-Idempotency-Status"])
-      assert.equal("kong-idempotency-plugin:anonymous:api.test:/orders:POST:k1-response", ctx.red.calls.get[1])
+      assert.equal("kong-idempotency-plugin:anonymous:api.test:/orders:POST:resp:k1", ctx.red.calls.get[1])
       assert.equal(1, #ctx.cache_calls.release)
+    end)
+
+    it("does not crash on a corrupt/non-object cached value; returns 409", function()
+      -- e.g. a foreign value at the response key decodes to a number.
+      local ctx = build({ request = POST, redis = { set_return = "NULL", get_return = "1" } })
+      assert.has_no.errors(function()
+        ctx.access.execute(conf(), VERSION, ctx.client)
+      end)
+      assert.equal(409, ctx.recorded.exit.status)
+      assert.equal("waiting_response", ctx.recorded.response_headers["X-Idempotency-Status"])
     end)
   end)
 

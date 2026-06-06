@@ -11,7 +11,7 @@ local function is_present(str)
   return str ~= nil and str ~= ""
 end
 
--- Namespaced prefix:
+-- Namespaced scope:
 --   "[<redis-username>::]<redis_prefix>:<consumer>:<host>:<path>:<method>"
 --
 -- The scope deliberately includes the authenticated consumer and the request
@@ -37,13 +37,17 @@ end
 
 -- The lock key: set with NX while the original request is processed so
 -- concurrent duplicates can detect an in-flight request.
+--
+-- The fixed ":lock:" / ":resp:" discriminator sits *before* the free-form
+-- idempotency key, so a lock key and a response key can never collide no matter
+-- what the key contains (e.g. a key ending in "-response").
 function _M.lock_key(conf, req, idempotency_key)
-  return fmt("%s:%s", _M.prefix(conf, req), idempotency_key)
+  return fmt("%s:lock:%s", _M.prefix(conf, req), idempotency_key)
 end
 
 -- The response key: holds the JSON-encoded response replayed to duplicates.
 function _M.response_key(conf, req, idempotency_key)
-  return fmt("%s:%s-response", _M.prefix(conf, req), idempotency_key)
+  return fmt("%s:resp:%s", _M.prefix(conf, req), idempotency_key)
 end
 
 return _M

@@ -61,7 +61,7 @@ describe("idempotency response", function()
     ctx.response.execute(conf({ redis_cache_time = 120 }), VERSION, ctx.client)
 
     local set = ctx.red.calls.set[1]
-    assert.equal("kong-idempotency-plugin:anonymous:api.test:/orders:POST:k1-response", set.key)
+    assert.equal("kong-idempotency-plugin:anonymous:api.test:/orders:POST:resp:k1", set.key)
     assert.same({ "EX", 120 }, set.args)
 
     local payload = cjson.decode(set.value)
@@ -70,6 +70,7 @@ describe("idempotency response", function()
     assert.equal("42", payload.headers["x-resource-id"])
 
     assert.equal("completed", ctx.recorded.response_headers["X-Idempotency-Status"])
+    assert.is_true(ctx.plugin_ctx.cached, "a successful cache write marks ctx.cached")
     assert.equal(1, #ctx.cache_calls.release)
   end)
 

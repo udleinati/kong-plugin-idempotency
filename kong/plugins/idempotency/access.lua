@@ -72,8 +72,11 @@ function _M.execute(conf, version, client)
 
   if ok == "OK" then
     -- First request for this key: let it through and mark it so the response
-    -- phase persists the upstream response for future duplicates.
+    -- phase persists the upstream response for future duplicates. Remember the
+    -- lock so the log phase can release it if this request never caches a
+    -- response (e.g. the upstream fails).
     kong.ctx.plugin.store = true
+    kong.ctx.plugin.lock_key = lock_key
     cache.release(client)
     return
   end
@@ -94,8 +97,14 @@ function _M.execute(conf, version, client)
     return kong.response.exit(409, { message = "Idempotent request already in progress" })
   end
 
-  -- Replay the original response verbatim.
-  local payload = cjson.decode(cached)
+  -- Replay the original response verbatim. Guard the decode: a corrupt or
+  -- foreign value at the response key must never crash the request.
+  local decoded, payload = pcall(cjson.decode, cached)
+  if not decoded or type(payload) ~= "table" or not payload.status then
+    kong.log.err("idempotency: cached response is unreadable; treating as in-progress")
+    kong.response.set_header(STATUS_HEADER, "waiting_response")
+    return kong.response.exit(409, { message = "Idempotent request already in progress" })
+  end
 
   for name, value in pairs(payload.headers or {}) do
     kong.response.set_header(name, value)

@@ -83,6 +83,16 @@ function _M.connection(conf)
   return red
 end
 
+-- Delete a key (used to release an orphaned lock when the original request
+-- failed to cache a response).
+function _M.del(red, key)
+  local ok, err = red:del(key)
+  if not ok then
+    kong.log.err("idempotency: failed to delete key: ", err)
+  end
+  return ok
+end
+
 -- Return the connection to the keepalive pool (10s idle, 100 per worker).
 function _M.release(red)
   if not red then

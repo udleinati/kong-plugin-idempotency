@@ -124,14 +124,17 @@ Compose) is also provided.
 
 ## Notes & possible improvements
 
-- **Lock vs. response TTL.** The lock and the cached response currently share a
-  single TTL. If the original request never produces a cached response (e.g. the
-  upstream or Kong dies before the `response` phase), duplicates receive `409`
-  for the whole `redis_cache_time` window. A shorter lock TTL — or releasing the
-  lock on an upstream `5xx` — would let clients retry sooner.
-- **Caching of error responses.** Every status code is cached, so a transient
-  upstream failure becomes "sticky" for the window. Restricting caching to, say,
-  `2xx`/`4xx` could be made configurable.
+- **Lock cleanup on failure.** If the original request acquires the lock but
+  never caches a response (e.g. the upstream resets the connection mid-flight),
+  the lock is released in the `log` phase (via a timer, since Redis is not
+  reachable from `log` directly), so retries are not stuck on `409` for the whole
+  window. One minor caveat remains: the lock and the cached response are set at
+  slightly different times with independent TTLs, so a duplicate arriving in a
+  narrow window (~the original's processing time, roughly one TTL later) could
+  reprocess despite a cached response.
+- **Caching of error responses.** A response that *is* produced is cached for any
+  status code, so a transient upstream `5xx` becomes "sticky" for the window.
+  Restricting caching to, say, `2xx`/`4xx` could be made configurable.
 - **Methods beyond POST.** Idempotency keys are also useful for `PUT`/`PATCH`/
   `DELETE`; the plugin is intentionally `POST`-only today.
 - **Key scope.** A key is scoped to the authenticated consumer (or `anonymous`),

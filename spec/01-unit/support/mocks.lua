@@ -10,6 +10,13 @@ local M = {}
 function M.fake_ngx()
   return {
     null = setmetatable({}, { __tostring = function() return "ngx.null" end }),
+    -- run the scheduled callback synchronously so specs can assert on its effect
+    timer = {
+      at = function(_, fn, ...)
+        fn(false, ...)
+        return true
+      end,
+    },
   }
 end
 
@@ -95,7 +102,7 @@ function M.fake_redis_client(opts)
   local red = {
     calls = {
       timeout = {}, connect = {}, auth = {}, select = {},
-      set = {}, get = {}, keepalive = {},
+      set = {}, get = {}, del = {}, keepalive = {},
     },
   }
 
@@ -130,6 +137,11 @@ function M.fake_redis_client(opts)
     self.calls.get[#self.calls.get + 1] = key
     if opts.get_err then return nil, opts.get_err end
     return opts.get_return
+  end
+
+  function red:del(key)
+    self.calls.del[#self.calls.del + 1] = key
+    return opts.del_return or 1
   end
 
   function red:set_keepalive(a, b)
