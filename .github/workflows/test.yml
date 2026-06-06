@@ -23,7 +23,10 @@ jobs:
       - name: Install Pongo
         run: |
           git clone --depth 1 https://github.com/Kong/kong-pongo.git "$HOME/kong-pongo"
-          echo "$HOME/kong-pongo" >> "$GITHUB_PATH"
+          # the executable is pongo.sh; expose it on PATH as `pongo`
+          mkdir -p "$HOME/.local/bin"
+          ln -s "$HOME/kong-pongo/pongo.sh" "$HOME/.local/bin/pongo"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Lint
         env:
