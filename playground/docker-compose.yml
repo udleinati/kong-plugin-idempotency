@@ -29,7 +29,7 @@ services:
       - "6379:6379/tcp"
 
   playground-kong-migrations:
-    image: kong:3.9
+    image: kong:3.9.2
     entrypoint:
       [
         "sh",

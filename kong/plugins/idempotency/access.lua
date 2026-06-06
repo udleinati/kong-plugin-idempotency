@@ -1,88 +1,95 @@
-local json = require "cjson"
+local cjson = require "cjson"
+local cache = require "kong.plugins.idempotency.cache"
+local keys = require "kong.plugins.idempotency.keys"
+
 local kong = kong
+local null = ngx.null
+
+local KEY_HEADER = "X-Idempotency-Key"
+local STATUS_HEADER = "X-Idempotency-Status"
+
 local _M = {}
+
+-- True when this request should take part in the idempotency flow at all.
+local function should_handle(conf, method, idempotency_key)
+  if method ~= "POST" then
+    return false
+  end
+
+  -- When the key is optional, only requests that actually carry one are
+  -- treated as idempotent.
+  if not conf.is_required and not idempotency_key then
+    return false
+  end
+
+  return true
+end
 
 function _M.execute(conf, version, client)
   local method = kong.request.get_method()
-  local path = kong.request.get_path()
+  local idempotency_key = kong.request.get_header(KEY_HEADER)
 
-  local idempotency_key = kong.request.get_header('X-Idempotency-Key')
-
-  if not (method == 'POST') or (not conf.is_required and not idempotency_key) then
+  if not should_handle(conf, method, idempotency_key) then
     return
   end
 
+  -- is_required == true and no key supplied.
   if not idempotency_key then
-    kong.response.exit(400, { message = 'X-Idempotency-Key required' })
+    return kong.response.exit(400, { message = KEY_HEADER .. " is required" })
   end
 
-
-  -- Build Redis key prefix (response will append -response later)
-  local user_prefix = ""
-
-  if conf.redis_username and conf.redis_username ~= "" then
-    user_prefix = conf.redis_username .. "::"
-  end
-
-  local prefix_redis_key = string.format(
-    "%s%s:%s:%s",
-    user_prefix,
-    conf.redis_prefix,
-    path or "no-path",
-    method or "UNKNOWN"
-  )
-
-  local idem_key = string.format("%s:%s", prefix_redis_key, idempotency_key)
-
-  -------------------------------------------------------------
-  -- 1. SET key = true NX EX <ttl>
-  -- resty.redis syntax:
-  -- client:set(key, value, "EX", ttl, "NX")
-  -------------------------------------------------------------
-  local ok, err = client:set(idem_key, true, "EX", conf.redis_cache_time, "NX")
-
-  if err then
-    kong.log.err("Redis SET NX failed: ", err)
+  -- Redis unreachable: fail open so an idempotency-cache outage never takes the
+  -- protected service down. The request is simply proxied normally.
+  if not client then
+    kong.log.err("idempotency: no Redis connection; passing request through")
     return
   end
 
-  -- If ok == OK -> first request -> wait until response.lua stores full response
+  local path = kong.request.get_path()
+  local lock_key = keys.lock_key(conf, method, path, idempotency_key)
+
+  -- Atomically claim the key: SET key 1 NX EX <ttl>.
+  -- "OK"  -> we won the race and own this request.
+  -- null  -> the key already exists (a duplicate).
+  local ok, err = client:set(lock_key, "1", "EX", conf.redis_cache_time, "NX")
+  if err then
+    kong.log.err("idempotency: Redis SET NX failed: ", err)
+    return
+  end
+
   if ok == "OK" then
-    kong.response.set_header("X-Idempotency-Status", "waiting_response")
+    -- First request for this key: let it through and mark it so the response
+    -- phase persists the upstream response for future duplicates.
+    kong.ctx.plugin.store = true
+    cache.release(client)
     return
   end
 
-  -------------------------------------------------------------
-  -- 2. Key already exists -> fetch cached response
-  -------------------------------------------------------------
-  local response_key = string.format("%s:%s-response", prefix_redis_key, idempotency_key)
-  local cache, err = client:get(response_key)
+  -- Duplicate: replay the cached response if the original already finished.
+  local response_key = keys.response_key(conf, method, path, idempotency_key)
+  local cached, gerr = client:get(response_key)
+  cache.release(client)
 
-  if err then
-    kong.log.err("Redis GET failed: ", err)
+  if gerr then
+    kong.log.err("idempotency: Redis GET failed: ", gerr)
   end
 
-  -- resty.redis returns ngx.null if key doesn't exist
-  if cache == ngx.null or not cache then
-    kong.response.set_header("X-Idempotency-Status", "waiting_response")
-    kong.response.exit(409, { message = "X-Idempotency-Status waiting_response" })
-    return
+  -- resty.redis returns ngx.null when the key does not exist yet, which means
+  -- the original request is still in flight.
+  if not cached or cached == null then
+    kong.response.set_header(STATUS_HEADER, "waiting_response")
+    return kong.response.exit(409, { message = "Idempotent request already in progress" })
   end
 
-  -------------------------------------------------------------
-  -- 3. Decode cached payload
-  -------------------------------------------------------------
-  local response = json.decode(cache)
+  -- Replay the original response verbatim.
+  local payload = cjson.decode(cached)
 
-  -- restore headers from the original response
-  for name, value in pairs(response.headers or {}) do
+  for name, value in pairs(payload.headers or {}) do
     kong.response.set_header(name, value)
   end
+  kong.response.set_header(STATUS_HEADER, "completed")
 
-  kong.response.set_header('X-Idempotency-Status', 'completed')
-
-  -- restore status and body from the original response
-  kong.response.exit(response.status, response.body)
+  return kong.response.exit(payload.status, payload.body)
 end
 
 return _M

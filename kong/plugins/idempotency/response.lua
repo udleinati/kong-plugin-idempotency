@@ -1,54 +1,62 @@
-local json = require "cjson"
+local cjson = require "cjson"
+local cache = require "kong.plugins.idempotency.cache"
+local keys = require "kong.plugins.idempotency.keys"
+
 local kong = kong
+
+local KEY_HEADER = "X-Idempotency-Key"
+local STATUS_HEADER = "X-Idempotency-Status"
+
+-- Hop-by-hop / length headers must not be stored and replayed verbatim: the
+-- body is re-sent on replay so Kong recomputes these. Keys are lowercase to
+-- match `kong.response.get_headers()`.
+local VOLATILE_HEADERS = {
+  ["connection"] = true,
+  ["content-length"] = true,
+  ["transfer-encoding"] = true,
+  ["x-idempotency-status"] = true,
+}
+
 local _M = {}
 
 function _M.execute(conf, version, client)
-  local method = kong.request.get_method()
-  local path = kong.request.get_path()
-  local idempotency_key = kong.request.get_header('X-Idempotency-Key')
-
-  -- Only POST should be idempotent
-  if not (method == 'POST') or (not conf.is_required and not idempotency_key) then
+  -- Only the original request (the one that won the NX lock in the access
+  -- phase) persists the response. Duplicates are served from the cache in the
+  -- access phase and passthrough requests never reach here.
+  if not kong.ctx.plugin.store then
     return
   end
 
-  kong.response.set_header('X-Idempotency-Status', 'completed')
+  kong.response.set_header(STATUS_HEADER, "completed")
 
-  -- Build the Redis key prefix
-  local user_prefix = ""
-
-  if conf.redis_username and conf.redis_username ~= "" then
-    user_prefix = conf.redis_username .. "::"
+  if not client then
+    kong.log.err("idempotency: no Redis connection; response not cached")
+    return
   end
 
-  local prefix_redis_key = string.format(
-    "%s%s:%s:%s",
-    user_prefix,
-    conf.redis_prefix,
-    path or "no-path",
-    method or "UNKNOWN",
-    idempotency_key
-  )
+  local method = kong.request.get_method()
+  local path = kong.request.get_path()
+  local idempotency_key = kong.request.get_header(KEY_HEADER)
 
-  -- Cache payload
+  local headers = kong.response.get_headers()
+  for name in pairs(VOLATILE_HEADERS) do
+    headers[name] = nil
+  end
+
   local payload = {
-    headers = kong.response.get_headers(),
+    headers = headers,
     status = kong.service.response.get_status(),
-    body = kong.service.response.get_raw_body()
+    body = kong.service.response.get_raw_body(),
   }
 
-  payload.headers["connection"] = nil
-  payload.headers["X-Idempotency-Status"] = nil
+  local response_key = keys.response_key(conf, method, path, idempotency_key)
 
-  local redis_key = string.format("%s:%s-response", prefix_redis_key, idempotency_key)
-
-  -- resty.redis syntax for SET with EX and NX:
-  -- client:set(key, value, "EX", ttl)
-  local ok, err = client:set(redis_key, json.encode(payload), "EX", conf.redis_cache_time)
-
+  local ok, err = client:set(response_key, cjson.encode(payload), "EX", conf.redis_cache_time)
   if not ok then
-    kong.log.err("Failed to write idempotency cache to Redis: ", err)
+    kong.log.err("idempotency: failed to cache response in Redis: ", err)
   end
+
+  cache.release(client)
 end
 
 return _M

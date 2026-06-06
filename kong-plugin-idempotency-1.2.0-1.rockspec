@@ -1,22 +1,23 @@
 package = "kong-plugin-idempotency"
-version = "1.1.2-1"
+version = "1.2.0-1"
 
 source = {
   url = "git://github.com/udleinati/kong-plugin-idempotency",
-  tag = "1.1.2",
+  tag = "1.2.0",
 }
 
 supported_platforms = {"linux", "macosx"}
 
 description = {
-   detailed = "A Kong plugin that enables idempotency to HTTP POST.",
+   detailed = "A Kong plugin that enables idempotency for HTTP POST requests, backed by Redis.",
    homepage = "git://github.com/udleinati/kong-plugin-idempotency",
    license = "MIT"
 }
 
+-- lua-resty-redis ships with Kong/OpenResty, so it is intentionally not pinned
+-- here: the plugin uses whatever version the running Kong provides.
 dependencies = {
   "lua >= 5.1",
-  "redis-lua == 2.0.4-1"
 }
 
 build = {
@@ -25,6 +26,7 @@ build = {
       ["kong.plugins.idempotency.access"] = "kong/plugins/idempotency/access.lua",
       ["kong.plugins.idempotency.response"] = "kong/plugins/idempotency/response.lua",
       ["kong.plugins.idempotency.cache"] = "kong/plugins/idempotency/cache.lua",
+      ["kong.plugins.idempotency.keys"] = "kong/plugins/idempotency/keys.lua",
       ["kong.plugins.idempotency.handler"] = "kong/plugins/idempotency/handler.lua",
       ["kong.plugins.idempotency.schema"] = "kong/plugins/idempotency/schema.lua"
    }
