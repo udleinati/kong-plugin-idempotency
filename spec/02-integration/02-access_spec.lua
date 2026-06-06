@@ -6,10 +6,12 @@ local REDIS_HOST = helpers.redis_host
 local REDIS_PORT = helpers.redis_port
 local REDIS_DATABASE = 0
 local PREFIX = "kong-idempotency-plugin"
+local HOST = "echo.test"
 
 -- Mirror the key format from keys.lua so we can assert/seed Redis directly.
+-- No auth here, so the consumer scope is "anonymous".
 local function lock_key(path, idem)
-  return PREFIX .. ":" .. path .. ":POST:" .. idem
+  return PREFIX .. ":anonymous:" .. HOST .. ":" .. path .. ":POST:" .. idem
 end
 local function response_key(path, idem)
   return lock_key(path, idem) .. "-response"
@@ -94,7 +96,7 @@ for _, strategy in helpers.each_strategy() do
 
     it("proxies the first request and stores the response in Redis", function()
       local res = proxy_client:post("/echo", {
-        headers = { ["X-Idempotency-Key"] = "first-1", ["Content-Type"] = "application/json" },
+        headers = { host = HOST, ["X-Idempotency-Key"] = "first-1", ["Content-Type"] = "application/json" },
         body = "{}",
       })
       assert.response(res).has.status(200)
@@ -112,6 +114,7 @@ for _, strategy in helpers.each_strategy() do
       -- First request carries a marker the echo upstream reflects into its body.
       local res1 = proxy_client:post("/echo", {
         headers = {
+          host = HOST,
           ["X-Idempotency-Key"] = "dup-1",
           ["X-Test"] = "first",
           ["Content-Type"] = "application/json",
@@ -128,6 +131,7 @@ for _, strategy in helpers.each_strategy() do
       proxy_client = helpers.proxy_client()
       local res2 = proxy_client:post("/echo", {
         headers = {
+          host = HOST,
           ["X-Idempotency-Key"] = "dup-1",
           ["X-Test"] = "second",
           ["Content-Type"] = "application/json",
@@ -148,7 +152,7 @@ for _, strategy in helpers.each_strategy() do
       red:close()
 
       local res = proxy_client:post("/echo", {
-        headers = { ["X-Idempotency-Key"] = "inflight-1", ["Content-Type"] = "application/json" },
+        headers = { host = HOST, ["X-Idempotency-Key"] = "inflight-1", ["Content-Type"] = "application/json" },
         body = "{}",
       })
       assert.response(res).has.status(409)
@@ -157,7 +161,15 @@ for _, strategy in helpers.each_strategy() do
 
     it("rejects a required-key request that omits the key", function()
       local res = proxy_client:post("/required", {
-        headers = { ["Content-Type"] = "application/json" },
+        headers = { host = HOST, ["Content-Type"] = "application/json" },
+        body = "{}",
+      })
+      assert.response(res).has.status(400)
+    end)
+
+    it("rejects a required-key request sending an empty key", function()
+      local res = proxy_client:post("/required", {
+        headers = { host = HOST, ["X-Idempotency-Key"] = "", ["Content-Type"] = "application/json" },
         body = "{}",
       })
       assert.response(res).has.status(400)
@@ -165,7 +177,7 @@ for _, strategy in helpers.each_strategy() do
 
     it("passes a keyless request through when the key is optional", function()
       local res = proxy_client:post("/echo", {
-        headers = { ["Content-Type"] = "application/json" },
+        headers = { host = HOST, ["Content-Type"] = "application/json" },
         body = "{}",
       })
       assert.response(res).has.status(200)
@@ -174,7 +186,7 @@ for _, strategy in helpers.each_strategy() do
 
     it("ignores non-POST requests", function()
       local res = proxy_client:get("/echo", {
-        headers = { ["X-Idempotency-Key"] = "get-1" },
+        headers = { host = HOST, ["X-Idempotency-Key"] = "get-1" },
       })
       assert.response(res).has.status(200)
       assert.is_nil(header(res, "X-Idempotency-Status"))
@@ -182,7 +194,7 @@ for _, strategy in helpers.each_strategy() do
 
     it("works with the legacy flat redis_* configuration", function()
       local res = proxy_client:post("/legacy", {
-        headers = { ["X-Idempotency-Key"] = "leg-1", ["Content-Type"] = "application/json" },
+        headers = { host = HOST, ["X-Idempotency-Key"] = "leg-1", ["Content-Type"] = "application/json" },
         body = "{}",
       })
       assert.response(res).has.status(200)

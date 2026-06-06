@@ -31,7 +31,8 @@ return {
 
         -- TTL (seconds) of both the idempotency lock and the cached response,
         -- i.e. the window during which a key is considered a duplicate.
-        { redis_cache_time = { type = "number", required = true, default = 86400, gt = 0 }, },
+        -- Integer: Redis `SET ... EX` only accepts whole seconds.
+        { redis_cache_time = { type = "integer", required = true, default = 86400, gt = 0 }, },
 
         -- Namespace prepended to every Redis key.
         { redis_prefix = { type = "string", required = true, default = "kong-idempotency-plugin" }, },

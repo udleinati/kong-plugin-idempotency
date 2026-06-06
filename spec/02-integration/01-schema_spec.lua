@@ -41,6 +41,12 @@ describe(PLUGIN_NAME .. ": schema", function()
     assert.is_not_nil(err.config.redis_cache_time)
   end)
 
+  it("rejects a fractional redis_cache_time (Redis EX needs whole seconds)", function()
+    local ok, err = validate({ redis = { host = "127.0.0.1" }, redis_cache_time = 1.5 })
+    assert.is_falsy(ok)
+    assert.is_not_nil(err.config.redis_cache_time)
+  end)
+
   it("accepts a complete redis config (nested config.redis.*)", function()
     local ok = validate({
       redis = {

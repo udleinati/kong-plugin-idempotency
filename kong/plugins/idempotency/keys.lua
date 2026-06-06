@@ -11,31 +11,39 @@ local function is_present(str)
   return str ~= nil and str ~= ""
 end
 
--- Namespaced prefix: "[username::]<redis_prefix>:<path>:<method>".
--- The username scope keeps keys from different ACL users from colliding when
--- they share a Redis instance.
-function _M.prefix(conf, method, path)
+-- Namespaced prefix:
+--   "[<redis-username>::]<redis_prefix>:<consumer>:<host>:<path>:<method>"
+--
+-- The scope deliberately includes the authenticated consumer and the request
+-- host on top of path+method, so the same client-supplied idempotency key
+-- cannot collide (and leak responses) across different consumers, hosts or
+-- endpoints that share one Redis instance. `req` is a table with:
+--   { host, path, method, consumer }   (consumer = consumer id or nil)
+function _M.prefix(conf, req)
   local username = conf.redis and conf.redis.username
   local user_scope = is_present(username) and (username .. "::") or ""
+  local consumer = is_present(req.consumer) and req.consumer or "anonymous"
 
   return fmt(
-    "%s%s:%s:%s",
+    "%s%s:%s:%s:%s:%s",
     user_scope,
     conf.redis_prefix,
-    path or "no-path",
-    method or "UNKNOWN"
+    consumer,
+    req.host or "no-host",
+    req.path or "no-path",
+    req.method or "UNKNOWN"
   )
 end
 
 -- The lock key: set with NX while the original request is processed so
 -- concurrent duplicates can detect an in-flight request.
-function _M.lock_key(conf, method, path, idempotency_key)
-  return fmt("%s:%s", _M.prefix(conf, method, path), idempotency_key)
+function _M.lock_key(conf, req, idempotency_key)
+  return fmt("%s:%s", _M.prefix(conf, req), idempotency_key)
 end
 
 -- The response key: holds the JSON-encoded response replayed to duplicates.
-function _M.response_key(conf, method, path, idempotency_key)
-  return fmt("%s:%s-response", _M.prefix(conf, method, path), idempotency_key)
+function _M.response_key(conf, req, idempotency_key)
+  return fmt("%s:%s-response", _M.prefix(conf, req), idempotency_key)
 end
 
 return _M

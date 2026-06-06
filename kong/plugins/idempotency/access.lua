@@ -29,6 +29,13 @@ function _M.execute(conf, version, client)
   local method = kong.request.get_method()
   local idempotency_key = kong.request.get_header(KEY_HEADER)
 
+  -- Treat an empty header value as no key at all. Otherwise every request that
+  -- sends `X-Idempotency-Key:` (empty) would share a single cache entry and
+  -- leak responses across unrelated requests (empty string is truthy in Lua).
+  if idempotency_key == "" then
+    idempotency_key = nil
+  end
+
   if not should_handle(conf, method, idempotency_key) then
     return
   end
@@ -45,8 +52,14 @@ function _M.execute(conf, version, client)
     return
   end
 
-  local path = kong.request.get_path()
-  local lock_key = keys.lock_key(conf, method, path, idempotency_key)
+  local consumer = kong.client.get_consumer()
+  local req = {
+    host = kong.request.get_host(),
+    path = kong.request.get_path(),
+    method = method,
+    consumer = consumer and consumer.id or nil,
+  }
+  local lock_key = keys.lock_key(conf, req, idempotency_key)
 
   -- Atomically claim the key: SET key 1 NX EX <ttl>.
   -- "OK"  -> we won the race and own this request.
@@ -66,7 +79,7 @@ function _M.execute(conf, version, client)
   end
 
   -- Duplicate: replay the cached response if the original already finished.
-  local response_key = keys.response_key(conf, method, path, idempotency_key)
+  local response_key = keys.response_key(conf, req, idempotency_key)
   local cached, gerr = client:get(response_key)
   cache.release(client)
 

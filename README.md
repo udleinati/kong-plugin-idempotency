@@ -28,8 +28,11 @@ to claim a per-key lock:
 3. **A duplicate arrives after the first finished** → the cached response is
    replayed verbatim with `X-Idempotency-Status: completed`.
 
-Keys are namespaced as `[<redis-username>::]<redis_prefix>:<path>:<method>:<key>`,
-so the same idempotency key on different routes/users never collides.
+Keys are namespaced as
+`[<redis-username>::]<redis_prefix>:<consumer>:<host>:<path>:<method>:<key>`
+(where `<consumer>` is the authenticated consumer id, or `anonymous`). This scope
+ensures the same client-supplied key cannot collide — and leak responses —
+across different consumers, hosts or endpoints sharing one Redis instance.
 
 > **Resilience:** if Redis is unreachable the plugin *fails open* — the request
 > is proxied normally (a warning is logged) rather than taking the protected
@@ -69,7 +72,7 @@ $ curl -X POST http://kong:8000/orders \
 | Parameter | default | description |
 | ---       | ---     | ---         |
 | `config.is_required` | `false` | When `false`, requests without an `X-Idempotency-Key` are passed through untouched. When `true`, such requests are rejected with `400`. |
-| `config.redis_cache_time` | `86400` | TTL (in seconds) of the idempotency lock and the cached response — i.e. the window during which a key is treated as a duplicate. Must be > 0. |
+| `config.redis_cache_time` | `86400` | TTL of the idempotency lock and the cached response — i.e. the window during which a key is treated as a duplicate. Whole seconds (integer), must be > 0. |
 | `config.redis_prefix` | `kong-idempotency-plugin` | Namespace prepended to every Redis key. |
 | `config.redis.host` | | **Mandatory.** Redis host. |
 | `config.redis.port` | `6379` | |
@@ -131,6 +134,11 @@ Compose) is also provided.
   `2xx`/`4xx` could be made configurable.
 - **Methods beyond POST.** Idempotency keys are also useful for `PUT`/`PATCH`/
   `DELETE`; the plugin is intentionally `POST`-only today.
+- **Key scope.** A key is scoped to the authenticated consumer (or `anonymous`),
+  request host, path and method (plus the static Redis username). Retries of the
+  *same* operation by the *same* caller are idempotent; the same key on a
+  different path is treated as a distinct request. Scoping is not yet
+  configurable.
 
 ## Author
 

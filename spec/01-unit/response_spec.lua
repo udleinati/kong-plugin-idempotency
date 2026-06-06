@@ -17,7 +17,7 @@ local function build(opts)
   opts = opts or {}
   local ngx_mock = mocks.fake_ngx()
   local kong_mock, recorded, plugin_ctx = mocks.fake_kong({
-    request = opts.request or { method = "POST", path = "/orders", headers = { ["X-Idempotency-Key"] = "k1" } },
+    request = opts.request or { method = "POST", path = "/orders", host = "api.test", headers = { ["X-Idempotency-Key"] = "k1" } },
     response = opts.response,
     plugin_ctx = opts.plugin_ctx or { store = true },
   })
@@ -61,7 +61,7 @@ describe("idempotency response", function()
     ctx.response.execute(conf({ redis_cache_time = 120 }), VERSION, ctx.client)
 
     local set = ctx.red.calls.set[1]
-    assert.equal("kong-idempotency-plugin:/orders:POST:k1-response", set.key)
+    assert.equal("kong-idempotency-plugin:anonymous:api.test:/orders:POST:k1-response", set.key)
     assert.same({ "EX", 120 }, set.args)
 
     local payload = cjson.decode(set.value)

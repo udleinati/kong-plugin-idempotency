@@ -6,34 +6,54 @@ local function conf(overrides)
   return c
 end
 
+local function req(overrides)
+  local r = { host = "api.test", path = "/orders", method = "POST", consumer = nil }
+  for k, v in pairs(overrides or {}) do r[k] = v end
+  return r
+end
+
 describe("idempotency keys", function()
 
   describe("prefix()", function()
-    it("namespaces by prefix, path and method", function()
+    it("namespaces by prefix, consumer (anonymous), host, path and method", function()
       assert.equal(
-        "kong-idempotency-plugin:/orders:POST",
-        keys.prefix(conf(), "POST", "/orders")
+        "kong-idempotency-plugin:anonymous:api.test:/orders:POST",
+        keys.prefix(conf(), req())
+      )
+    end)
+
+    it("scopes by the authenticated consumer when present", function()
+      assert.equal(
+        "kong-idempotency-plugin:c-123:api.test:/orders:POST",
+        keys.prefix(conf(), req({ consumer = "c-123" }))
+      )
+    end)
+
+    it("isolates different hosts", function()
+      assert.not_equal(
+        keys.prefix(conf(), req({ host = "a.test" })),
+        keys.prefix(conf(), req({ host = "b.test" }))
+      )
+    end)
+
+    it("isolates different consumers", function()
+      assert.not_equal(
+        keys.prefix(conf(), req({ consumer = "alice" })),
+        keys.prefix(conf(), req({ consumer = "bob" }))
       )
     end)
 
     it("scopes by redis username when present", function()
       assert.equal(
-        "alice::kong-idempotency-plugin:/orders:POST",
-        keys.prefix(conf({ redis = { username = "alice" } }), "POST", "/orders")
+        "alice::kong-idempotency-plugin:anonymous:api.test:/orders:POST",
+        keys.prefix(conf({ redis = { username = "alice" } }), req())
       )
     end)
 
-    it("does not scope when the username is empty", function()
+    it("falls back when host, path or method are missing", function()
       assert.equal(
-        "kong-idempotency-plugin:/orders:POST",
-        keys.prefix(conf({ redis = { username = "" } }), "POST", "/orders")
-      )
-    end)
-
-    it("falls back when path or method are missing", function()
-      assert.equal(
-        "kong-idempotency-plugin:no-path:UNKNOWN",
-        keys.prefix(conf(), nil, nil)
+        "kong-idempotency-plugin:anonymous:no-host:no-path:UNKNOWN",
+        keys.prefix(conf(), { })
       )
     end)
   end)
@@ -41,8 +61,8 @@ describe("idempotency keys", function()
   describe("lock_key()", function()
     it("appends the idempotency key to the prefix", function()
       assert.equal(
-        "kong-idempotency-plugin:/orders:POST:abc-123",
-        keys.lock_key(conf(), "POST", "/orders", "abc-123")
+        "kong-idempotency-plugin:anonymous:api.test:/orders:POST:abc-123",
+        keys.lock_key(conf(), req(), "abc-123")
       )
     end)
   end)
@@ -50,16 +70,15 @@ describe("idempotency keys", function()
   describe("response_key()", function()
     it("appends the idempotency key with a -response suffix", function()
       assert.equal(
-        "kong-idempotency-plugin:/orders:POST:abc-123-response",
-        keys.response_key(conf(), "POST", "/orders", "abc-123")
+        "kong-idempotency-plugin:anonymous:api.test:/orders:POST:abc-123-response",
+        keys.response_key(conf(), req(), "abc-123")
       )
     end)
 
     it("differs from the lock key for the same request", function()
-      local c = conf()
       assert.not_equal(
-        keys.lock_key(c, "POST", "/orders", "k"),
-        keys.response_key(c, "POST", "/orders", "k")
+        keys.lock_key(conf(), req(), "k"),
+        keys.response_key(conf(), req(), "k")
       )
     end)
   end)

@@ -34,9 +34,14 @@ function _M.execute(conf, version, client)
     return
   end
 
-  local method = kong.request.get_method()
-  local path = kong.request.get_path()
   local idempotency_key = kong.request.get_header(KEY_HEADER)
+  local consumer = kong.client.get_consumer()
+  local req = {
+    host = kong.request.get_host(),
+    path = kong.request.get_path(),
+    method = kong.request.get_method(),
+    consumer = consumer and consumer.id or nil,
+  }
 
   local headers = kong.response.get_headers()
   for name in pairs(VOLATILE_HEADERS) do
@@ -49,7 +54,7 @@ function _M.execute(conf, version, client)
     body = kong.service.response.get_raw_body(),
   }
 
-  local response_key = keys.response_key(conf, method, path, idempotency_key)
+  local response_key = keys.response_key(conf, req, idempotency_key)
 
   local ok, err = client:set(response_key, cjson.encode(payload), "EX", conf.redis_cache_time)
   if not ok then

@@ -39,7 +39,12 @@ function M.fake_kong(opts)
     request = {
       get_method = function() return req.method or "POST" end,
       get_path = function() return req.path or "/" end,
+      get_host = function() return req.host or "example.test" end,
       get_header = function(name) return (req.headers or {})[name] end,
+    },
+    client = {
+      -- req.consumer is a table like { id = "c1" } or nil
+      get_consumer = function() return req.consumer end,
     },
     response = {
       set_header = function(name, value)

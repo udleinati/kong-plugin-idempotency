@@ -53,7 +53,7 @@ local function build(opts)
   }
 end
 
-local POST = { method = "POST", path = "/orders", headers = { ["X-Idempotency-Key"] = "k1" } }
+local POST = { method = "POST", path = "/orders", host = "api.test", headers = { ["X-Idempotency-Key"] = "k1" } }
 
 describe("idempotency access", function()
 
@@ -73,11 +73,27 @@ describe("idempotency access", function()
       assert.equal(0, #ctx.red.calls.set)
       assert.is_nil(ctx.recorded.exit)
     end)
+
+    it("treats an empty key header as no key (no shared cache entry)", function()
+      local ctx = build({ request = { method = "POST", path = "/orders", headers = { ["X-Idempotency-Key"] = "" } } })
+      ctx.access.execute(conf({ is_required = false }), VERSION, ctx.client)
+
+      assert.equal(0, #ctx.red.calls.set, "an empty key must not claim a redis lock")
+      assert.is_nil(ctx.recorded.exit)
+    end)
   end)
 
   describe("required key", function()
     it("rejects POST without a key with 400", function()
       local ctx = build({ request = { method = "POST", path = "/orders", headers = {} } })
+      ctx.access.execute(conf({ is_required = true }), VERSION, ctx.client)
+
+      assert.equal(400, ctx.recorded.exit.status)
+      assert.equal(0, #ctx.red.calls.set)
+    end)
+
+    it("rejects POST with an empty key with 400", function()
+      local ctx = build({ request = { method = "POST", path = "/orders", headers = { ["X-Idempotency-Key"] = "" } } })
       ctx.access.execute(conf({ is_required = true }), VERSION, ctx.client)
 
       assert.equal(400, ctx.recorded.exit.status)
@@ -101,13 +117,22 @@ describe("idempotency access", function()
       ctx.access.execute(conf({ redis_cache_time = 120 }), VERSION, ctx.client)
 
       local set = ctx.red.calls.set[1]
-      assert.equal("kong-idempotency-plugin:/orders:POST:k1", set.key)
+      assert.equal("kong-idempotency-plugin:anonymous:api.test:/orders:POST:k1", set.key)
       assert.equal("1", set.value)
       assert.same({ "EX", 120, "NX" }, set.args)
 
       assert.is_true(ctx.plugin_ctx.store)
       assert.is_nil(ctx.recorded.exit)
       assert.equal(1, #ctx.cache_calls.release)
+    end)
+
+    it("scopes the lock key by the authenticated consumer", function()
+      local request = { method = "POST", path = "/orders", host = "api.test",
+                        consumer = { id = "c-1" }, headers = { ["X-Idempotency-Key"] = "k1" } }
+      local ctx = build({ request = request, redis = { set_return = "OK" } })
+      ctx.access.execute(conf(), VERSION, ctx.client)
+
+      assert.equal("kong-idempotency-plugin:c-1:api.test:/orders:POST:k1", ctx.red.calls.set[1].key)
     end)
   end)
 
@@ -135,7 +160,7 @@ describe("idempotency access", function()
       assert.equal("created", ctx.recorded.exit.body)
       assert.equal("42", ctx.recorded.response_headers["x-resource-id"])
       assert.equal("completed", ctx.recorded.response_headers["X-Idempotency-Status"])
-      assert.equal("kong-idempotency-plugin:/orders:POST:k1-response", ctx.red.calls.get[1])
+      assert.equal("kong-idempotency-plugin:anonymous:api.test:/orders:POST:k1-response", ctx.red.calls.get[1])
       assert.equal(1, #ctx.cache_calls.release)
     end)
   end)
