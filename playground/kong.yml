@@ -1,0 +1,51 @@
+# Kong declarative (DB-less) configuration for the idempotency playground.
+#
+# This file IS the playground's Kong setup: one upstream echo service exposed
+# through two routes — one where the idempotency key is optional and one where
+# it is required. Edit it and `docker compose restart playground-kong` to try
+# different settings.
+_format_version: "3.0"
+
+services:
+  - name: echo-service
+    url: http://playground-service:3200
+    routes:
+      # Idempotency key optional: POSTs without X-Idempotency-Key pass through.
+      - name: optional-route
+        paths:
+          - /
+        plugins:
+          - name: idempotency
+            config:
+              is_required: false
+              redis_cache_time: 7200
+              redis:
+                host: playground-redis
+                port: 6379
+
+      # Idempotency key required: POSTs without X-Idempotency-Key get 400.
+      # More specific than "/", so requests to /required match this route.
+      - name: required-route
+        paths:
+          - /required
+        plugins:
+          - name: idempotency
+            config:
+              is_required: true
+              redis_cache_time: 7200
+              redis:
+                host: playground-redis
+                port: 6379
+
+      # Short TTL, used by edge.sh to exercise cache expiry.
+      - name: shortttl-route
+        paths:
+          - /shortttl
+        plugins:
+          - name: idempotency
+            config:
+              is_required: false
+              redis_cache_time: 2
+              redis:
+                host: playground-redis
+                port: 6379
