@@ -27,6 +27,13 @@ const server = http.createServer((req, res) => {
     const binary = head(req, 'x-echo-binary') === '1';
 
     const send = () => {
+      // Chaos: abruptly drop the connection mid-flight (simulate an upstream
+      // crash / RST) so we can see how the plugin behaves on a failed original.
+      if (head(req, 'x-echo-reset') === '1') {
+        res.socket.destroy();
+        return;
+      }
+
       res.statusCode = status;
       res.setHeader('X-Upstream-Id', id);
 

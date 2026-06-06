@@ -167,5 +167,36 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+step "11) Colisão de sufixo '-response' não derruba o plugin (sem 500)"
+# A key "<x>-response" used to share a Redis key with the response slot of "<x>".
+probe POST / "$TMP/col0" -H "X-Idempotency-Key: $KP-col-response" -d '{}' >/dev/null
+( probe POST / "$TMP/colbg" -H "X-Idempotency-Key: $KP-col" -H 'X-Echo-Delay: 4000' -d '{}' >/dev/null ) &
+sleep 0.7
+IFS='|' read -r st uid idem < <(probe POST / "$TMP/coldup" -H "X-Idempotency-Key: $KP-col" -d '{}')
+wait
+printf '  duplicata de uma key com sufixo colidente: status=%s\n' "$st"
+[ "$st" != "500" ] && pass "sem 500 na colisão de sufixo (status $st)" || bug "500 na colisão de sufixo -response"
+
+# ---------------------------------------------------------------------------
+step "12) Falha do upstream libera o lock (retry não fica preso em 409)"
+IFS='|' read -r s1 u1 i1 < <(probe POST / "$TMP/rst1" -H "X-Idempotency-Key: $KP-rst" -H 'X-Echo-Reset: 1' -d '{}')
+sleep 1   # let the cleanup timer run
+IFS='|' read -r s2 u2 i2 < <(probe POST / "$TMP/rst2" -H "X-Idempotency-Key: $KP-rst" -d '{}')
+printf '  1ª (upstream reset)=%s ; retry=%s idem=%s\n' "$s1" "$s2" "$i2"
+{ [ "$s1" = "502" ] && [ "$s2" = "200" ]; } \
+  && pass "lock liberado após falha do upstream; retry reprocessou" \
+  || bug "retry preso após falha do upstream (1ª=$s1 retry=$s2)"
+
+# ---------------------------------------------------------------------------
+step "13) Cliente desconecta no meio -> retry serve do cache"
+curl -s -o /dev/null --max-time 1 -X POST "$PROXY/" -H "X-Idempotency-Key: $KP-disc" -H 'X-Echo-Delay: 5000' -d '{}' >/dev/null 2>&1 || true
+sleep 6
+IFS='|' read -r s u i < <(probe POST / "$TMP/disc" -H "X-Idempotency-Key: $KP-disc" -d '{}')
+printf '  retry após desconexão do cliente: status=%s idem=%s\n' "$s" "$i"
+[ "$s" = "200" ] \
+  && pass "Kong concluiu no servidor; retry serve do cache" \
+  || note "retry status $s (depende de proxy_ignore_client_abort no Kong)"
+
+# ---------------------------------------------------------------------------
 printf '\n%s== Achados: %d BUG(s), %d NOTA(s) ==%s\n' "$B" "$bugs" "$notes" "$Z"
 [ "$bugs" -eq 0 ]

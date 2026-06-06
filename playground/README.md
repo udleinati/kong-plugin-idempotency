@@ -48,10 +48,14 @@ designed, but a gotcha) / `BUG`:
 7. custom upstream headers survive the cached replay;
 8. TTL expiry on the short-TTL route reprocesses after the window;
 9. an empty `X-Idempotency-Key` is treated as no key (no cross-request leak);
-10. binary (non-UTF-8) bodies are cached and replayed byte-for-byte.
+10. binary (non-UTF-8) bodies are cached and replayed byte-for-byte;
+11. a key ending in `-response` does not collide with another key's cache slot;
+12. an upstream failure releases the lock, so retries are not stuck on `409`;
+13. a client disconnecting mid-flight still gets the cached result on retry.
 
 The echo upstream honours control headers used by these probes:
-`X-Echo-Status`, `X-Echo-Delay`, `X-Echo-Header`, `X-Echo-Binary`.
+`X-Echo-Status`, `X-Echo-Delay`, `X-Echo-Header`, `X-Echo-Binary`,
+`X-Echo-Gzip`, `X-Echo-Reset` (drops the connection mid-flight).
 
 ## What the demo shows
 
