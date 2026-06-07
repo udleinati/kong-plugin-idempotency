@@ -52,7 +52,7 @@ describe("idempotency handler", function()
 
   it("reports a version that matches the rockspec", function()
     local handler = build()
-    assert.equal("1.3.0", handler.VERSION)
+    assert.equal("2.0.0", handler.VERSION)
   end)
 
   it("opens a connection and delegates :access() with conf, version, client", function()

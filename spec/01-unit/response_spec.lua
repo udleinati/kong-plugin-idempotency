@@ -1,7 +1,7 @@
 local mocks = require "spec.01-unit.support.mocks"
 local cjson = require "cjson"
 
-local VERSION = "1.2.0"
+local VERSION = "2.0.0"
 
 local function conf(overrides)
   local c = {

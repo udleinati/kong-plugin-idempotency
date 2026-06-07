@@ -1,9 +1,9 @@
 package = "kong-plugin-idempotency"
-version = "1.3.0-1"
+version = "2.0.0-1"
 
 source = {
   url = "git://github.com/udleinati/kong-plugin-idempotency",
-  tag = "1.3.0",
+  tag = "2.0.0",
 }
 
 supported_platforms = {"linux", "macosx"}
