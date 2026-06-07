@@ -49,3 +49,29 @@ services:
               redis:
                 host: playground-redis
                 port: 6379
+
+      # Idempotency on more than POST.
+      - name: multi-route
+        paths:
+          - /multi
+        plugins:
+          - name: idempotency
+            config:
+              methods: ["POST", "PUT", "PATCH", "DELETE"]
+              redis_cache_time: 7200
+              redis:
+                host: playground-redis
+                port: 6379
+
+      # Strict mode: reject with 503 when Redis is unavailable.
+      - name: strict-route
+        paths:
+          - /strict
+        plugins:
+          - name: idempotency
+            config:
+              fail_open: false
+              redis_cache_time: 7200
+              redis:
+                host: playground-redis
+                port: 6379

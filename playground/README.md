@@ -13,10 +13,13 @@ the stock `kong:3.9.2` image.
 | `playground-redis` | Redis 8 backing the idempotency cache. Exposed on `:6379`. |
 | `playground-service` | Node echo upstream — returns JSON with a fresh random `id` per request. |
 
-Two routes are pre-configured (see `kong.yml`):
+Routes pre-configured (see `kong.yml`):
 
-- `/` — idempotency key **optional** (POSTs without the key pass through).
-- `/required` — idempotency key **required** (POSTs without the key get `400`).
+- `/` — key **optional** (POSTs without the key pass through); default config.
+- `/required` — key **required** (POSTs without the key get `400`).
+- `/shortttl` — 2-second TTL, for the cache-expiry probe.
+- `/multi` — idempotency on `POST/PUT/PATCH/DELETE`.
+- `/strict` — `fail_open=false`: rejects with `503` when Redis is down.
 
 ## Run it
 
@@ -51,7 +54,11 @@ designed, but a gotcha) / `BUG`:
 10. binary (non-UTF-8) bodies are cached and replayed byte-for-byte;
 11. a key ending in `-response` does not collide with another key's cache slot;
 12. an upstream failure releases the lock, so retries are not stuck on `409`;
-13. a client disconnecting mid-flight still gets the cached result on retry.
+13. a client disconnecting mid-flight still gets the cached result on retry;
+14. reusing a key with a different body is rejected with `422` (fingerprint);
+15. a `5xx` is not cached, so the retry reprocesses;
+16. `PUT` is idempotent on the `/multi` route;
+17. strict mode returns `503` when Redis is down (and fail-open passes through).
 
 The echo upstream honours control headers used by these probes:
 `X-Echo-Status`, `X-Echo-Delay`, `X-Echo-Header`, `X-Echo-Binary`,

@@ -198,5 +198,50 @@ printf '  retry após desconexão do cliente: status=%s idem=%s\n' "$s" "$i"
   || note "retry status $s (depende de proxy_ignore_client_abort no Kong)"
 
 # ---------------------------------------------------------------------------
+step "14) Fingerprint: mesma key + corpo diferente -> 422"
+IFS='|' read -r s1 u1 i1 < <(probe POST / "$TMP/fp1" -H "X-Idempotency-Key: $KP-fp" -d '{"amount":1}')
+IFS='|' read -r s2 u2 i2 < <(probe POST / "$TMP/fp2" -H "X-Idempotency-Key: $KP-fp" -d '{"amount":999}')
+printf '  1ª (corpo A)=%s ; reuso com corpo B=%s idem=%s\n' "$s1" "$s2" "$i2"
+{ [ "$s1" = "200" ] && [ "$s2" = "422" ]; } \
+  && pass "reuso de key com requisição diferente rejeitado (422)" \
+  || bug "esperava 200 depois 422 (obtive $s1/$s2)"
+
+# ---------------------------------------------------------------------------
+step "15) 5xx não é cacheado (default) -> retry reprocessa"
+IFS='|' read -r s1 u1 i1 < <(probe POST / "$TMP/e1" -H "X-Idempotency-Key: $KP-5xx" -H 'X-Echo-Status: 500' -d '{}')
+sleep 1   # let the lock-cleanup timer run
+IFS='|' read -r s2 u2 i2 < <(probe POST / "$TMP/e2" -H "X-Idempotency-Key: $KP-5xx" -d '{}')
+printf '  1ª (500)=%s ; retry=%s idem=%s\n' "$s1" "$s2" "$i2"
+{ [ "$s1" = "500" ] && [ "$s2" = "200" ]; } \
+  && pass "5xx não grudou; retry reprocessou (200)" \
+  || bug "5xx não liberou o retry (1ª=$s1 retry=$s2)"
+
+# ---------------------------------------------------------------------------
+step "16) Métodos: PUT é idempotente na rota /multi"
+IFS='|' read -r s1 u1 i1 < <(probe PUT /multi "$TMP/m1b" -H "X-Idempotency-Key: $KP-put2" -d '{}')
+IFS='|' read -r s2 u2 i2 < <(probe PUT /multi "$TMP/m2b" -H "X-Idempotency-Key: $KP-put2" -d '{}')
+printf '  PUT#1 id=%s ; PUT#2 id=%s idem=%s\n' "$u1" "$u2" "$i2"
+{ [ "$s2" = "200" ] && [ -n "$u1" ] && [ "$u1" = "$u2" ]; } \
+  && pass "PUT idempotente (duplicata servida do cache)" \
+  || bug "PUT não foi idempotente em /multi ($u1 vs $u2)"
+
+# ---------------------------------------------------------------------------
+step "17) Modo estrito: Redis fora -> /strict=503, /=passthrough"
+if docker compose ps >/dev/null 2>&1; then
+  docker compose stop playground-redis >/dev/null 2>&1
+  sleep 1
+  IFS='|' read -r ss su si < <(probe POST /strict "$TMP/st1" -H "X-Idempotency-Key: $KP-st" -d '{}')
+  IFS='|' read -r ps pu pi < <(probe POST / "$TMP/st2" -H "X-Idempotency-Key: $KP-pt" -d '{}')
+  docker compose start playground-redis >/dev/null 2>&1
+  for i in $(seq 1 20); do docker compose exec -T playground-redis redis-cli ping >/dev/null 2>&1 && break; sleep 0.5; done
+  printf '  /strict (fail_open=false)=%s ; / (fail_open=true)=%s\n' "$ss" "$ps"
+  { [ "$ss" = "503" ] && [ "$ps" = "200" ]; } \
+    && pass "estrito rejeita com 503; fail-open passa direto" \
+    || bug "modo estrito/fail-open inesperado (/strict=$ss //=$ps)"
+else
+  note "probe de modo estrito pulada (sem docker compose neste contexto)"
+fi
+
+# ---------------------------------------------------------------------------
 printf '\n%s== Achados: %d BUG(s), %d NOTA(s) ==%s\n' "$B" "$bugs" "$notes" "$Z"
 [ "$bugs" -eq 0 ]
