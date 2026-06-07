@@ -20,6 +20,39 @@ operation, and reuse the same value when retrying that operation.
 
 ### How it works
 
+```mermaid
+flowchart TD
+    A(["Incoming request"]) --> M{"Method covered?"}
+    M -->|no| PASS(["Proxy normally"])
+    M -->|yes| KEY{"Idempotency-Key present?"}
+    KEY -->|no| REQ{"is_required?"}
+    REQ -->|no| PASS
+    REQ -->|yes| R400(["400 · key required"])
+    KEY -->|yes| LOCK["Redis: SET lock NX EX ttl<br/>value = fingerprint of body + query"]
+
+    LOCK -->|first request| UP["Proxy to upstream"]
+    UP --> CACHE["Cache status + body + headers in Redis<br/>TTL = redis_cache_time"]
+    CACHE --> OK(["completed · 2xx"])
+
+    LOCK -->|duplicate| FP{"Fingerprint matches?"}
+    FP -->|no| C422(["conflict · 422"])
+    FP -->|yes| RESP{"Response cached yet?"}
+    RESP -->|yes| REPLAY(["completed · replayed from cache"])
+    RESP -->|no| W409(["waiting_response · 409"])
+
+    classDef ok fill:#d4edda,stroke:#28a745,color:#155724;
+    classDef warn fill:#fff3cd,stroke:#ffc107,color:#856404;
+    classDef err fill:#f8d7da,stroke:#dc3545,color:#721c24;
+    classDef pass fill:#e2e3e5,stroke:#6c757d,color:#383d41;
+    class OK,REPLAY ok;
+    class W409 warn;
+    class C422,R400 err;
+    class PASS pass;
+```
+
+> The labels in the green/amber/red boxes are the resulting
+> `X-Idempotency-Status` header value and HTTP status code.
+
 For each eligible request the plugin uses an atomic Redis `SET key <fp> NX EX <ttl>`
 to claim a per-key lock (where `<fp>` is a fingerprint of the request):
 
