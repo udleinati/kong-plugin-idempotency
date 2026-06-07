@@ -20,6 +20,11 @@ Routes pre-configured (see `kong.yml`):
 - `/shortttl` — 2-second TTL, for the cache-expiry probe.
 - `/multi` — idempotency on `POST/PUT/PATCH/DELETE`.
 - `/strict` — `fail_open=false`: rejects with `503` when Redis is down.
+- `/auth` — key-auth + idempotency: keys are scoped **per consumer** (`alice`, `bob`).
+- `/cache5xx` — `cache_5xx=true`: a `5xx` is cached and replayed.
+- `/nofp` — `verify_fingerprint=false`: a reused key replays even if the body differs.
+- `/db` — `redis.database: 1`: keys land in a non-default logical database.
+- `/redis-auth` — points at a password-protected Redis (exercises Redis `AUTH`).
 
 ## Run it
 
@@ -47,7 +52,7 @@ designed, but a gotcha) / `BUG`:
 3. method scoping: `PUT` with a key is ignored (`NOTE` — only `POST` is handled);
 4. path scoping: the same key on different paths does not collide (`NOTE`);
 5. non-200 status is preserved and replayed (e.g. `201`);
-6. error caching: a `500` is replayed for the whole window (`NOTE` — sticky 5xx);
+6. `cache_5xx=true`: a `500` IS cached and replayed (`/cache5xx`);
 7. custom upstream headers survive the cached replay;
 8. TTL expiry on the short-TTL route reprocesses after the window;
 9. an empty `X-Idempotency-Key` is treated as no key (no cross-request leak);
@@ -56,9 +61,18 @@ designed, but a gotcha) / `BUG`:
 12. an upstream failure releases the lock, so retries are not stuck on `409`;
 13. a client disconnecting mid-flight still gets the cached result on retry;
 14. reusing a key with a different body is rejected with `422` (fingerprint);
-15. a `5xx` is not cached, so the retry reprocesses;
+15. a `5xx` is not cached by default, so the retry reprocesses;
 16. `PUT` is idempotent on the `/multi` route;
-17. strict mode returns `503` when Redis is down (and fail-open passes through).
+17. strict mode returns `503` when Redis is down (and fail-open passes through);
+18. `verify_fingerprint=false`: a reused key with a different body replays (no `422`);
+19. per-consumer scoping: the same key under `alice` vs `bob` does not collide (`/auth`);
+20. `PATCH` and `DELETE` are idempotent on `/multi`;
+21. a gzipped response is cached and replayed byte-for-byte (`Content-Encoding` kept);
+22. host scoping: the same key under different `Host` headers does not collide;
+23. `redis.database: 1` (`/db`): keys land in db 1, not db 0;
+24. a corrupt cached value is treated as in-flight (`409`), never a `500` (`payload.decode`);
+25. an empty `X-Idempotency-Key` on `/required` is rejected with `400`;
+26. Redis `AUTH`: idempotency works against a password-protected Redis (`/redis-auth`).
 
 The echo upstream honours control headers used by these probes:
 `X-Echo-Status`, `X-Echo-Delay`, `X-Echo-Header`, `X-Echo-Binary`,

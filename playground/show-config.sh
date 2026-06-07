@@ -22,7 +22,7 @@ echo
 echo "============================================================"
 echo " Loaded by Kong (Admin API @ $ADMIN — read-only in DB-less)"
 echo "============================================================"
-for endpoint in services routes plugins; do
+for endpoint in services routes plugins consumers; do
   echo
   echo "--- GET /$endpoint ---"
   # .data[] strips Kong's envelope/metadata when jq is present.

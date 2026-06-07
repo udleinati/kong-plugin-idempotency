@@ -15,6 +15,15 @@ services:
     ports:
       - "6379:6379/tcp"
 
+  # Password-protected Redis, backing the /redis-auth route so the AUTH path is
+  # exercised. Not exposed on the host — only Kong (in-network) talks to it.
+  playground-redis-auth:
+    image: redis:8-alpine
+    command: ["redis-server", "--requirepass", "playpass"]
+    restart: on-failure
+    networks:
+      - playground-net
+
   # Upstream echo service: returns JSON with a fresh random id per request, so a
   # cached (replayed) response is easy to spot — its id stays the same.
   playground-service:
@@ -33,6 +42,7 @@ services:
     image: kong:3.9.2
     depends_on:
       - playground-redis
+      - playground-redis-auth
       - playground-service
     environment:
       KONG_DATABASE: "off"

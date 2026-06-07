@@ -114,15 +114,15 @@ printf '  1ª: status=%s id=%s  ;  dup: status=%s id=%s idem=%s\n' "$s1" "$u1" "
   || bug "status 201 não preservado/cacheado corretamente ($s1 -> $s2)"
 
 # ---------------------------------------------------------------------------
-step "6) Erros são cacheados? (500 vira sticky)"
-IFS='|' read -r s1 u1 i1 < <(probe POST / "$TMP/e1" -H "X-Idempotency-Key: $KP-500" -H 'X-Echo-Status: 500' -d '{}')
-IFS='|' read -r s2 u2 i2 < <(probe POST / "$TMP/e2" -H "X-Idempotency-Key: $KP-500" -d '{}')
+step "6) cache_5xx=true: um 500 é cacheado e re-servido (rota /cache5xx)"
+# Counterpart to #15 (default cache_5xx=false): here the error IS stored, so the
+# retry replays the SAME 500 for the whole TTL instead of reprocessing.
+IFS='|' read -r s1 u1 i1 < <(probe POST /cache5xx "$TMP/e1" -H "X-Idempotency-Key: $KP-5xxon" -H 'X-Echo-Status: 500' -d '{}')
+IFS='|' read -r s2 u2 i2 < <(probe POST /cache5xx "$TMP/e2" -H "X-Idempotency-Key: $KP-5xxon" -d '{}')
 printf '  1ª: status=%s id=%s  ;  retry: status=%s id=%s idem=%s\n' "$s1" "$u1" "$s2" "$u2" "$i2"
-if [ "$s1" = "500" ] && [ "$s2" = "500" ] && [ "$u1" = "$u2" ]; then
-  note "um 500 transitório fica 'grudado': o retry recebe o MESMO 500 do cache por toda a janela (redis_cache_time). Considerar não cachear 5xx."
-else
-  pass "erro 5xx não ficou preso no cache (status $s1 -> $s2)"
-fi
+{ [ "$s1" = "500" ] && [ "$s2" = "500" ] && [ "$u1" = "$u2" ] && [ "$i2" = "completed" ]; } \
+  && pass "5xx cacheado e re-servido quando cache_5xx=true (retry recebe o MESMO 500)" \
+  || bug "cache_5xx=true não re-serviu o 500 ($s1 -> $s2, ids $u1/$u2, idem=$i2)"
 
 # ---------------------------------------------------------------------------
 step "7) Replay preserva header custom do upstream"
@@ -241,6 +241,117 @@ if docker compose ps >/dev/null 2>&1; then
 else
   note "probe de modo estrito pulada (sem docker compose neste contexto)"
 fi
+
+# ---------------------------------------------------------------------------
+step "18) verify_fingerprint=false: key reusada com corpo diferente replica a original (sem 422)"
+# Counterpart to #14 (default fingerprint on -> 422). With it off, the body is
+# not part of the match, so a reused key just replays the first response.
+IFS='|' read -r s1 u1 i1 < <(probe POST /nofp "$TMP/nf1" -H "X-Idempotency-Key: $KP-nofp" -d '{"amount":1}')
+IFS='|' read -r s2 u2 i2 < <(probe POST /nofp "$TMP/nf2" -H "X-Idempotency-Key: $KP-nofp" -d '{"amount":999}')
+printf '  1ª (corpo A)=%s id=%s  ;  reuso (corpo B)=%s id=%s idem=%s\n' "$s1" "$u1" "$s2" "$u2" "$i2"
+{ [ "$s1" = "200" ] && [ "$s2" = "200" ] && [ "$u1" = "$u2" ] && [ "$i2" = "completed" ]; } \
+  && pass "sem fingerprint, corpo diferente replica a original (não 422)" \
+  || bug "verify_fingerprint=false não replicou a original (1ª=$s1 reuso=$s2, ids $u1/$u2, idem=$i2)"
+
+# ---------------------------------------------------------------------------
+step "19) Escopo por consumer: mesma key, consumers diferentes não colidem (rota /auth, key-auth)"
+# The plugin runs at PRIORITY -1 (after auth), so keys are namespaced per
+# consumer: alice and bob reusing the same key must NOT see each other's response.
+IFS='|' read -r sa ua ia  < <(probe POST /auth "$TMP/ca1" -H 'apikey: alice-key' -H "X-Idempotency-Key: $KP-cons" -d '{}')
+IFS='|' read -r sb ub ib  < <(probe POST /auth "$TMP/cb1" -H 'apikey: bob-key'   -H "X-Idempotency-Key: $KP-cons" -d '{}')
+IFS='|' read -r sa2 ua2 ia2 < <(probe POST /auth "$TMP/ca2" -H 'apikey: alice-key' -H "X-Idempotency-Key: $KP-cons" -d '{}')
+printf '  alice id=%s  ;  bob id=%s  ;  alice retry id=%s (idem=%s)\n' "$ua" "$ub" "$ua2" "$ia2"
+{ [ "$sa" = "200" ] && [ "$sb" = "200" ] && [ -n "$ua" ] && [ "$ua" != "$ub" ] && [ "$ua2" = "$ua" ]; } \
+  && pass "key escopada por consumer: alice e bob não colidem; retry da alice vem do cache dela" \
+  || bug "escopo por consumer falhou (alice=$ua bob=$ub aliceRetry=$ua2; status $sa/$sb)"
+
+# ---------------------------------------------------------------------------
+step "20) Métodos: PATCH e DELETE são idempotentes na rota /multi"
+IFS='|' read -r sp1 up1 ip1 < <(probe PATCH  /multi "$TMP/pa1" -H "X-Idempotency-Key: $KP-patch" -d '{}')
+IFS='|' read -r sp2 up2 ip2 < <(probe PATCH  /multi "$TMP/pa2" -H "X-Idempotency-Key: $KP-patch" -d '{}')
+IFS='|' read -r sd1 ud1 id1 < <(probe DELETE /multi "$TMP/de1" -H "X-Idempotency-Key: $KP-del"   -d '{}')
+IFS='|' read -r sd2 ud2 id2 < <(probe DELETE /multi "$TMP/de2" -H "X-Idempotency-Key: $KP-del"   -d '{}')
+printf '  PATCH ids=%s/%s (idem=%s)  ;  DELETE ids=%s/%s (idem=%s)\n' "$up1" "$up2" "$ip2" "$ud1" "$ud2" "$id2"
+{ [ -n "$up1" ] && [ "$up1" = "$up2" ] && [ -n "$ud1" ] && [ "$ud1" = "$ud2" ]; } \
+  && pass "PATCH e DELETE idempotentes (duplicatas servidas do cache)" \
+  || bug "PATCH/DELETE não idempotentes (PATCH $up1/$up2, DELETE $ud1/$ud2)"
+
+# ---------------------------------------------------------------------------
+step "21) Resposta gzip: cacheada e re-servida com Content-Encoding preservado"
+# Uses the X-Echo-Gzip hook: a compressed body must replay byte-for-byte and keep
+# Content-Encoding (content-length is the only length header that gets stripped).
+ceval() { grep -i "^$1:" "$2" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r'; }
+curl -s -o "$TMP/g1b" -D "$TMP/g1h" -X POST "$PROXY/" -H "X-Idempotency-Key: $KP-gz" -H 'X-Echo-Gzip: 1' -d '{}'
+curl -s -o "$TMP/g2b" -D "$TMP/g2h" -X POST "$PROXY/" -H "X-Idempotency-Key: $KP-gz" -H 'X-Echo-Gzip: 1' -d '{}'
+ce1=$(ceval 'content-encoding' "$TMP/g1h"); ce2=$(ceval 'content-encoding' "$TMP/g2h")
+gidem=$(ceval 'x-idempotency-status' "$TMP/g2h")
+printf '  Content-Encoding 1ª=[%s] dup=[%s]  ;  idem dup=%s\n' "$ce1" "$ce2" "$gidem"
+{ [ "$ce1" = "gzip" ] && [ "$ce2" = "gzip" ] && [ "$gidem" = "completed" ] && cmp -s "$TMP/g1b" "$TMP/g2b"; } \
+  && pass "resposta gzip cacheada e re-servida byte-a-byte, Content-Encoding preservado" \
+  || bug "replay gzip incorreto (CE $ce1/$ce2; idem=$gidem; bytes diferem?)"
+
+# ---------------------------------------------------------------------------
+step "22) Escopo por host: mesma key, Host diferente não colide"
+# keys.lua escopa por host além de consumer/path: a mesma key em hosts
+# diferentes não pode vazar resposta entre eles.
+IFS='|' read -r sh1 uh1 ih1 < <(probe POST / "$TMP/hosta" -H 'Host: alpha.test' -H "X-Idempotency-Key: $KP-host" -d '{}')
+IFS='|' read -r sh2 uh2 ih2 < <(probe POST / "$TMP/hostb" -H 'Host: beta.test'  -H "X-Idempotency-Key: $KP-host" -d '{}')
+printf '  alpha.test id=%s  ;  beta.test id=%s\n' "$uh1" "$uh2"
+{ [ "$sh1" = "200" ] && [ "$sh2" = "200" ] && [ -n "$uh1" ] && [ "$uh1" != "$uh2" ]; } \
+  && pass "key escopada por host: alpha.test e beta.test não colidem" \
+  || bug "colisão entre hosts diferentes (alpha=$uh1 beta=$uh2)"
+
+# ---------------------------------------------------------------------------
+step "23) Seleção de database Redis: rota /db usa db 1 (não db 0)"
+if docker compose ps >/dev/null 2>&1; then
+  IFS='|' read -r sdb udb idb < <(probe POST /db "$TMP/db1" -H "X-Idempotency-Key: $KP-db" -d '{}')
+  n1=$(docker compose exec -T playground-redis redis-cli -n 1 keys "*:resp:$KP-db" | tr -d '\r' | grep -c .)
+  n0=$(docker compose exec -T playground-redis redis-cli -n 0 keys "*:resp:$KP-db" | tr -d '\r' | grep -c .)
+  printf '  /db status=%s  ;  chaves resp no db1=%s db0=%s\n' "$sdb" "$n1" "$n0"
+  { [ "$sdb" = "200" ] && [ "$n1" -ge 1 ] && [ "$n0" -eq 0 ]; } \
+    && pass "database não-default selecionado: chave no db 1, nenhuma no db 0" \
+    || bug "seleção de database falhou (status $sdb; db1=$n1 db0=$n0)"
+else
+  note "probe de seleção de database pulada (sem docker compose neste contexto)"
+fi
+
+# ---------------------------------------------------------------------------
+step "24) Valor corrompido no cache -> 409 (decode defensivo, sem 500)"
+if docker compose ps >/dev/null 2>&1; then
+  K="$KP-corrupt"
+  probe POST / "$TMP/cor0" -H "X-Idempotency-Key: $K" -d '{}' >/dev/null
+  sleep 0.5   # let the response phase write the cache
+  rk=$(docker compose exec -T playground-redis redis-cli keys "*:resp:$K" | tr -d '\r' | head -1)
+  if [ -n "$rk" ]; then
+    docker compose exec -T playground-redis redis-cli set "$rk" 'not-a-valid-payload' >/dev/null
+    IFS='|' read -r scz ucz icz < <(probe POST / "$TMP/cor1" -H "X-Idempotency-Key: $K" -d '{}')
+    printf '  resp key corrompida=%s  ;  duplicata: status=%s idem=%s\n' "$rk" "$scz" "$icz"
+    { [ "$scz" = "409" ] && [ "$icz" = "waiting_response" ]; } \
+      && pass "valor corrompido tratado como em-progresso (409), sem 500" \
+      || bug "decode defensivo falhou (status $scz idem $icz; esperava 409/waiting_response)"
+  else
+    note "não encontrei a resp key para corromper (formato de chave mudou?)"
+  fi
+else
+  note "probe de valor corrompido pulada (sem docker compose neste contexto)"
+fi
+
+# ---------------------------------------------------------------------------
+step "25) /required com key VAZIA -> 400 (mesmo tratamento que key ausente)"
+IFS='|' read -r sre ure ire < <(probe POST /required "$TMP/reqempty" -H 'X-Idempotency-Key;' -d '{}')
+printf '  /required com X-Idempotency-Key vazio: status=%s\n' "$sre"
+[ "$sre" = "400" ] \
+  && pass "key vazia em rota required rejeitada com 400" \
+  || bug "esperava 400 para key vazia em /required (obtive $sre)"
+
+# ---------------------------------------------------------------------------
+step "26) Redis com senha (AUTH): rota /redis-auth conecta, autentica e funciona"
+IFS='|' read -r sa1 ua1 ia1 < <(probe POST /redis-auth "$TMP/ra1" -H "X-Idempotency-Key: $KP-ra" -d '{}')
+IFS='|' read -r sa2 ua2 ia2 < <(probe POST /redis-auth "$TMP/ra2" -H "X-Idempotency-Key: $KP-ra" -d '{}')
+printf '  1ª id=%s  ;  dup id=%s idem=%s\n' "$ua1" "$ua2" "$ia2"
+{ [ "$sa1" = "200" ] && [ -n "$ua1" ] && [ "$ua1" = "$ua2" ] && [ "$ia2" = "completed" ]; } \
+  && pass "idempotência funciona com Redis protegido por senha (AUTH ok)" \
+  || bug "AUTH no Redis falhou (1ª=$sa1 id=$ua1 ; dup=$sa2 id=$ua2 idem=$ia2)"
 
 # ---------------------------------------------------------------------------
 printf '\n%s== Achados: %d BUG(s), %d NOTA(s) ==%s\n' "$B" "$bugs" "$notes" "$Z"

@@ -75,3 +75,83 @@ services:
               redis:
                 host: playground-redis
                 port: 6379
+
+      # Authenticated route (key-auth): idempotency keys are scoped per consumer,
+      # so the SAME X-Idempotency-Key used by different consumers must not
+      # collide. Send the credential as `apikey: <key>` (see consumers below).
+      - name: auth-route
+        paths:
+          - /auth
+        plugins:
+          - name: key-auth
+            config:
+              key_names: ["apikey"]
+          - name: idempotency
+            config:
+              redis_cache_time: 7200
+              redis:
+                host: playground-redis
+                port: 6379
+
+      # cache_5xx=true: a 5xx response IS cached and replayed for the whole TTL.
+      - name: cache5xx-route
+        paths:
+          - /cache5xx
+        plugins:
+          - name: idempotency
+            config:
+              cache_5xx: true
+              redis_cache_time: 7200
+              redis:
+                host: playground-redis
+                port: 6379
+
+      # verify_fingerprint=false: a reused key replays the original response even
+      # when the body differs (no 422 on mismatch).
+      - name: nofp-route
+        paths:
+          - /nofp
+        plugins:
+          - name: idempotency
+            config:
+              verify_fingerprint: false
+              redis_cache_time: 7200
+              redis:
+                host: playground-redis
+                port: 6379
+
+      # Non-default Redis logical database: keys land in db 1, not db 0.
+      - name: db-route
+        paths:
+          - /db
+        plugins:
+          - name: idempotency
+            config:
+              redis_cache_time: 7200
+              redis:
+                host: playground-redis
+                port: 6379
+                database: 1
+
+      # Password-protected Redis (AUTH): backed by the playground-redis-auth
+      # service (started with --requirepass). Exercises the auth() path.
+      - name: redis-auth-route
+        paths:
+          - /redis-auth
+        plugins:
+          - name: idempotency
+            config:
+              redis_cache_time: 7200
+              redis:
+                host: playground-redis-auth
+                port: 6379
+                password: playpass
+
+# Consumers for the per-consumer scoping probe (/auth route, key-auth).
+consumers:
+  - username: alice
+    keyauth_credentials:
+      - key: alice-key
+  - username: bob
+    keyauth_credentials:
+      - key: bob-key
