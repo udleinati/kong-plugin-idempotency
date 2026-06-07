@@ -1,54 +1,60 @@
-local json = require "cjson"
+local cache = require "kong.plugins.idempotency.cache"
+local keys = require "kong.plugins.idempotency.keys"
+local scope = require "kong.plugins.idempotency.scope"
+local payload = require "kong.plugins.idempotency.payload"
+local lifecycle = require "kong.plugins.idempotency.lifecycle"
+
 local kong = kong
+
+local KEY_HEADER = "X-Idempotency-Key"
+local STATUS_HEADER = "X-Idempotency-Status"
+
 local _M = {}
 
 function _M.execute(conf, version, client)
-  local method = kong.request.get_method()
-  local path = kong.request.get_path()
-  local idempotency_key = kong.request.get_header('X-Idempotency-Key')
-
-  -- Only POST should be idempotent
-  if not (method == 'POST') or (not conf.is_required and not idempotency_key) then
+  -- Only the Original request (the one that won the NX lock in the access
+  -- phase) persists the response. Duplicates are served from the cache in the
+  -- access phase and passthrough requests never reach here.
+  if not lifecycle.is_original(kong.ctx.plugin) then
     return
   end
 
-  kong.response.set_header('X-Idempotency-Status', 'completed')
+  local status = kong.service.response.get_status()
 
-  -- Build the Redis key prefix
-  local user_prefix = ""
-
-  if conf.redis_username and conf.redis_username ~= "" then
-    user_prefix = conf.redis_username .. "::"
+  -- Do not cache server errors unless explicitly enabled: leave ctx.cached
+  -- unset so the log phase frees the lock and the client can retry.
+  if not conf.cache_5xx and status >= 500 then
+    cache.release(client)
+    return
   end
 
-  local prefix_redis_key = string.format(
-    "%s%s:%s:%s",
-    user_prefix,
-    conf.redis_prefix,
-    path or "no-path",
-    method or "UNKNOWN",
-    idempotency_key
-  )
+  kong.response.set_header(STATUS_HEADER, "completed")
 
-  -- Cache payload
-  local payload = {
+  if not client then
+    kong.log.err("idempotency: no Redis connection; response not cached")
+    return
+  end
+
+  local idempotency_key = kong.request.get_header(KEY_HEADER)
+  local req = scope.from_request()
+
+  local encoded = payload.encode({
+    status = status,
+    body = kong.service.response.get_raw_body(),
     headers = kong.response.get_headers(),
-    status = kong.service.response.get_status(),
-    body = kong.service.response.get_raw_body()
-  }
+  })
 
-  payload.headers["connection"] = nil
-  payload.headers["X-Idempotency-Status"] = nil
+  local response_key = keys.response_key(conf, req, idempotency_key)
 
-  local redis_key = string.format("%s:%s-response", prefix_redis_key, idempotency_key)
-
-  -- resty.redis syntax for SET with EX and NX:
-  -- client:set(key, value, "EX", ttl)
-  local ok, err = client:set(redis_key, json.encode(payload), "EX", conf.redis_cache_time)
-
-  if not ok then
-    kong.log.err("Failed to write idempotency cache to Redis: ", err)
+  local ok, err = client:set(response_key, encoded, "EX", conf.redis_cache_time)
+  if ok then
+    -- Tell the log phase the response was persisted, so it keeps the lock.
+    lifecycle.cached(kong.ctx.plugin)
+  else
+    kong.log.err("idempotency: failed to cache response in Redis: ", err)
   end
+
+  cache.release(client)
 end
 
 return _M
