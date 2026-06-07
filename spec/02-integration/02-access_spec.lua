@@ -75,6 +75,26 @@ for _, strategy in helpers.each_strategy() do
         redis_database = REDIS_DATABASE,
       })
 
+      -- Idempotency on PUT (and POST).
+      add_plugin("/multi", {
+        methods = { "POST", "PUT" },
+        redis_cache_time = 60,
+        redis = { host = REDIS_HOST, port = REDIS_PORT, database = REDIS_DATABASE },
+      })
+
+      -- Strict / lenient routes pointed at an unreachable Redis (port 1) to
+      -- exercise the fail_open behaviour deterministically.
+      add_plugin("/strict", {
+        fail_open = false,
+        redis_cache_time = 60,
+        redis = { host = "127.0.0.1", port = 1, timeout = 100 },
+      })
+      add_plugin("/lenient", {
+        fail_open = true,
+        redis_cache_time = 60,
+        redis = { host = "127.0.0.1", port = 1, timeout = 100 },
+      })
+
       assert(helpers.start_kong({
         database = strategy,
         plugins = "bundled," .. PLUGIN_NAME,
@@ -224,6 +244,42 @@ for _, strategy in helpers.each_strategy() do
       local red = redis_connect()
       assert.not_equal(ngx.null, red:get(response_key("/legacy", "leg-1")))
       red:close()
+    end)
+
+    it("is idempotent on PUT when methods includes it", function()
+      local res1 = proxy_client:put("/multi", {
+        headers = { host = HOST, ["X-Idempotency-Key"] = "put-e2e", ["X-Test"] = "first", ["Content-Type"] = "application/json" },
+        body = "{}",
+      })
+      assert.response(res1).has.status(200)
+      assert.equal("first", (assert.response(res1).has.jsonbody()).headers["x-test"])
+      proxy_client:close()
+
+      proxy_client = helpers.proxy_client()
+      local res2 = proxy_client:put("/multi", {
+        headers = { host = HOST, ["X-Idempotency-Key"] = "put-e2e", ["X-Test"] = "second", ["Content-Type"] = "application/json" },
+        body = "{}",
+      })
+      assert.response(res2).has.status(200)
+      assert.equal("first", (assert.response(res2).has.jsonbody()).headers["x-test"],
+                   "the PUT duplicate must be served from the cache")
+    end)
+
+    it("rejects with 503 in strict mode when Redis is unreachable", function()
+      local res = proxy_client:post("/strict", {
+        headers = { host = HOST, ["X-Idempotency-Key"] = "strict-e2e", ["Content-Type"] = "application/json" },
+        body = "{}",
+      })
+      assert.response(res).has.status(503)
+    end)
+
+    it("passes through (fail_open) when Redis is unreachable", function()
+      local res = proxy_client:post("/lenient", {
+        headers = { host = HOST, ["X-Idempotency-Key"] = "lenient-e2e", ["Content-Type"] = "application/json" },
+        body = "{}",
+      })
+      assert.response(res).has.status(200)
+      assert.is_nil(header(res, "X-Idempotency-Status"))
     end)
   end)
 end

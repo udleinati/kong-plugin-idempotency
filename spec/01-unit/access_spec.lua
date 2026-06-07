@@ -229,6 +229,25 @@ describe("idempotency access", function()
       assert.equal(201, ctx.recorded.exit.status)
       assert.equal("completed", ctx.recorded.response_headers["X-Idempotency-Status"])
     end)
+
+    it("includes the query string in the fingerprint", function()
+      local request = { method = "POST", path = "/orders", host = "api.test", raw_body = "{}",
+                        query = "a=1", headers = { ["X-Idempotency-Key"] = "k1" } }
+      local ctx = build({ request = request, redis = { set_return = "OK" } })
+      ctx.access.execute(conf({ verify_fingerprint = true }), VERSION, ctx.client)
+      assert.equal("md5(" .. "{}" .. "\0" .. "a=1" .. ")", ctx.red.calls.set[1].value)
+    end)
+
+    it("does not crash when the body is unavailable (too large)", function()
+      local request = { method = "POST", path = "/orders", host = "api.test",
+                        raw_body = nil, headers = { ["X-Idempotency-Key"] = "k1" } }
+      local ctx = build({ request = request, redis = { set_return = "OK" } })
+      assert.has_no.errors(function()
+        ctx.access.execute(conf({ verify_fingerprint = true }), VERSION, ctx.client)
+      end)
+      -- fingerprint falls back to the query only (empty here)
+      assert.equal("md5(" .. "\0" .. ")", ctx.red.calls.set[1].value)
+    end)
   end)
 
   describe("methods", function()
@@ -263,6 +282,12 @@ describe("idempotency access", function()
     it("returns 503 when the SET command errors", function()
       local ctx = build({ request = POST, redis = { set_err = "timeout" } })
       ctx.access.execute(conf({ fail_open = false }), VERSION, ctx.client)
+      assert.equal(503, ctx.recorded.exit.status)
+    end)
+
+    it("returns 503 when the GET command errors on a duplicate", function()
+      local ctx = build({ request = POST, redis = { set_return = "NULL", get_err = "timeout" } })
+      ctx.access.execute(conf({ fail_open = false, verify_fingerprint = false }), VERSION, ctx.client)
       assert.equal(503, ctx.recorded.exit.status)
     end)
   end)

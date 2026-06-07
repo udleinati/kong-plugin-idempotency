@@ -51,6 +51,12 @@ describe(PLUGIN_NAME .. ": schema", function()
     assert.is_not_nil(err.config.methods)
   end)
 
+  it("rejects an empty methods list", function()
+    local ok, err = validate({ redis = { host = "127.0.0.1" }, methods = {} })
+    assert.is_falsy(ok)
+    assert.is_not_nil(err.config.methods)
+  end)
+
   it("rejects a non-positive redis_cache_time", function()
     local ok, err = validate({ redis = { host = "127.0.0.1" }, redis_cache_time = 0 })
     assert.is_falsy(ok)

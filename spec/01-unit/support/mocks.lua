@@ -147,6 +147,7 @@ function M.fake_redis_client(opts)
 
   function red:del(key)
     self.calls.del[#self.calls.del + 1] = key
+    if opts.del_err then return nil, opts.del_err end
     return opts.del_return or 1
   end
 

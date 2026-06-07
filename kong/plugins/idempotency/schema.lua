@@ -34,6 +34,7 @@ return {
             type = "array",
             required = true,
             default = { "POST" },
+            len_min = 1,
             elements = { type = "string", one_of = { "POST", "PUT", "PATCH", "DELETE" } },
         }, },
 
