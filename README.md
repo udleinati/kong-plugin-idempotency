@@ -1,17 +1,22 @@
 # Kong Plugin Idempotency
 
-A Kong plugin that adds **idempotency** to HTTP `POST` requests, backed by Redis.
+A Kong plugin that makes unsafe HTTP requests **idempotent** (safe to retry),
+backed by Redis. `POST` is handled by default; `PUT`/`PATCH`/`DELETE` can be
+enabled via `config.methods`.
 
 ## Description
 
-Clients send an `X-Idempotency-Key` header with their `POST` request. The plugin
-guarantees that, for a given key, the request is processed **at most once**: the
-first request is proxied to the upstream and its response is cached in Redis;
-any later request carrying the same key replays that cached response instead of
-hitting the upstream again.
+Clients send an `X-Idempotency-Key` header with their request. For a given key,
+the plugin guarantees the request is processed **at most once**: the first
+request is proxied to the upstream and its response is cached in Redis; any later
+request carrying the same key replays that cached response instead of hitting the
+upstream again.
 
-This makes it safe for clients to retry `POST` requests (network blips, timeouts,
+This makes it safe for clients to retry requests (network blips, timeouts,
 double-clicks) without creating duplicate side effects.
+
+The **client owns key uniqueness**: use a fresh value (e.g. a UUID) per distinct
+operation, and reuse the same value when retrying that operation.
 
 ### How it works
 
@@ -43,7 +48,19 @@ different request.
 > **Resilience:** if Redis is unreachable the plugin *fails open* — the request
 > is proxied normally (a warning is logged) rather than taking the protected
 > service down. The idempotency guarantee is lost for the duration of the
-> outage.
+> outage. Set `fail_open = false` to reject with `503` instead.
+
+> **Ordering & buffering:** the plugin runs at priority `-1`, i.e. *after*
+> authentication, so the authenticated consumer is available for per-consumer
+> scoping — keep your auth plugin in front of it. Because it caches the whole
+> upstream response, Kong buffers responses on the routes where it is enabled
+> (a consideration for very large response bodies).
+
+## Requirements
+
+- **Kong** ≥ 3.6 — uses Kong's shared `config.redis.*` schema. Tested on
+  3.6.1, 3.8.0 and 3.9.2.
+- **Redis** reachable from Kong (Redis 6.0+ if you use the ACL `username` auth).
 
 ## Installation
 
@@ -107,6 +124,30 @@ $ curl -X POST http://kong:8000/orders \
 | `X-Idempotency-Status` | `waiting_response` | The original request for this key is still in flight (returned with `409`). |
 | `X-Idempotency-Status` | `conflict` | The key was reused with a different request (returned with `422`). |
 
+### Example
+
+```bash
+# 1) first request — proxied to the upstream, response cached
+$ curl -i -X POST http://kong:8000/orders -H 'X-Idempotency-Key: abc' -d '{"amount":100}'
+HTTP/1.1 201 Created
+X-Idempotency-Status: completed
+
+# 2) same key, same request — replayed from cache (upstream is NOT called again)
+$ curl -i -X POST http://kong:8000/orders -H 'X-Idempotency-Key: abc' -d '{"amount":100}'
+HTTP/1.1 201 Created
+X-Idempotency-Status: completed
+
+# 3) same key, DIFFERENT request — rejected (verify_fingerprint)
+$ curl -i -X POST http://kong:8000/orders -H 'X-Idempotency-Key: abc' -d '{"amount":999}'
+HTTP/1.1 422 Unprocessable Entity
+X-Idempotency-Status: conflict
+
+# 4) same key while the first is still in flight — retry shortly
+$ curl -i -X POST http://kong:8000/orders -H 'X-Idempotency-Key: abc' -d '{"amount":100}'
+HTTP/1.1 409 Conflict
+X-Idempotency-Status: waiting_response
+```
+
 ## Development & Testing
 
 The plugin is covered by two test suites under `spec/`:
@@ -114,8 +155,9 @@ The plugin is covered by two test suites under `spec/`:
 - `spec/01-unit` — fast, fully-mocked unit tests for every module
   (`keys`, `cache`, `access`, `response`, `handler`). No Kong/network needed.
 - `spec/02-integration` — end-to-end tests that boot a real Kong + Redis,
-  validate the schema and exercise the full flow (first request, cache replay,
-  in-flight `409`, required key, passthrough, legacy config).
+  validate the schema and exercise the full flow: first request, cache replay,
+  in-flight `409`, fingerprint conflict `422`, required key, passthrough, other
+  methods, strict-mode `503`, per-consumer scoping and the legacy config.
 
 Tests run inside [Pongo](https://github.com/Kong/kong-pongo), Kong's official
 test runner (requires Docker). The provided `Makefile` vendors Pongo locally on
@@ -155,3 +197,7 @@ Compose) is also provided.
 ## Author
 
 Udlei Nati - [GitHub](https://github.com/udleinati "GitHub") - [LinkedIn](https://www.linkedin.com/in/udleinati/ "LinkedIn")
+
+## License
+
+[MIT](./LICENSE)
