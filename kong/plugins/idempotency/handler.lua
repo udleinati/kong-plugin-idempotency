@@ -1,6 +1,7 @@
 local access = require "kong.plugins.idempotency.access"
 local response = require "kong.plugins.idempotency.response"
 local cache = require "kong.plugins.idempotency.cache"
+local lifecycle = require "kong.plugins.idempotency.lifecycle"
 
 local kong = kong
 local ngx = ngx
@@ -19,9 +20,9 @@ function Idempotency:access(conf)
 end
 
 function Idempotency:response(conf)
-  -- Only the original request writes to the cache; skip the Redis round-trip
+  -- Only the Original request writes to the cache; skip the Redis round-trip
   -- entirely for duplicates and passthrough requests.
-  if not kong.ctx.plugin.store then
+  if not lifecycle.is_original(kong.ctx.plugin) then
     return
   end
 
@@ -30,19 +31,18 @@ function Idempotency:response(conf)
 end
 
 function Idempotency:log(conf)
-  local ctx = kong.ctx.plugin
-
-  -- The original request acquired the lock but never cached a response (e.g. the
-  -- upstream failed mid-flight). Release the lock so retries are not stuck on 409
-  -- for the whole TTL window. Successful requests keep their lock (it is what
-  -- routes duplicates to the cached response) and schedule no cleanup.
-  if not ctx.store or ctx.cached or not ctx.lock_key then
+  -- The Original acquired the lock but never cached a response (e.g. the upstream
+  -- failed mid-flight): free the orphaned lock so retries are not stuck on 409
+  -- for the whole TTL window. The lifecycle module owns that decision; a nil
+  -- result means there is nothing to free (duplicate, passthrough, or a
+  -- successful request that keeps its lock to route future duplicates).
+  local lock_key = lifecycle.orphaned_lock(kong.ctx.plugin)
+  if not lock_key then
     return
   end
 
   -- Cosocket (Redis) APIs are disabled in the log phase, so defer the delete to
   -- a zero-delay timer, which runs in a context where connections are allowed.
-  local lock_key = ctx.lock_key
   local ok, err = ngx.timer.at(0, function(premature)
     if premature then
       return

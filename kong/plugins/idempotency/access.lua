@@ -1,6 +1,8 @@
-local cjson = require "cjson"
 local cache = require "kong.plugins.idempotency.cache"
 local keys = require "kong.plugins.idempotency.keys"
+local scope = require "kong.plugins.idempotency.scope"
+local payload = require "kong.plugins.idempotency.payload"
+local lifecycle = require "kong.plugins.idempotency.lifecycle"
 
 local kong = kong
 local null = ngx.null
@@ -95,13 +97,7 @@ function _M.execute(conf, version, client)
     return
   end
 
-  local consumer = kong.client.get_consumer()
-  local req = {
-    host = kong.request.get_host(),
-    path = kong.request.get_path(),
-    method = method,
-    consumer = consumer and consumer.id or nil,
-  }
+  local req = scope.from_request()
   local lock_key = keys.lock_key(conf, req, idempotency_key)
   local fp = fingerprint(conf)
 
@@ -117,12 +113,11 @@ function _M.execute(conf, version, client)
   end
 
   if ok == "OK" then
-    -- First request for this key: let it through and mark it so the response
-    -- phase persists the upstream response for future duplicates. Remember the
-    -- lock so the log phase can release it if this request never caches a
-    -- response (e.g. the upstream fails).
-    kong.ctx.plugin.store = true
-    kong.ctx.plugin.lock_key = lock_key
+    -- First request for this key: let it through and mark it the Original so the
+    -- response phase persists the upstream response for future duplicates. The
+    -- lock key is remembered so the log phase can release it if this request
+    -- never caches a response (e.g. the upstream fails).
+    lifecycle.won_lock(kong.ctx.plugin, lock_key)
     cache.release(client)
     return
   end
@@ -161,21 +156,22 @@ function _M.execute(conf, version, client)
     return kong.response.exit(409, { message = "Idempotent request already in progress" })
   end
 
-  -- Replay the original response verbatim. Guard the decode: a corrupt or
-  -- foreign value at the response key must never crash the request.
-  local decoded, payload = pcall(cjson.decode, cached)
-  if not decoded or type(payload) ~= "table" or not payload.status then
+  -- Replay the original response verbatim. A corrupt or foreign value at the
+  -- response key decodes to nil and must never crash the request: treat it as
+  -- the original still being in flight.
+  local replay = payload.decode(cached)
+  if not replay then
     kong.log.err("idempotency: cached response is unreadable; treating as in-progress")
     kong.response.set_header(STATUS_HEADER, "waiting_response")
     return kong.response.exit(409, { message = "Idempotent request already in progress" })
   end
 
-  for name, value in pairs(payload.headers or {}) do
+  for name, value in pairs(replay.headers or {}) do
     kong.response.set_header(name, value)
   end
   kong.response.set_header(STATUS_HEADER, "completed")
 
-  return kong.response.exit(payload.status, payload.body)
+  return kong.response.exit(replay.status, replay.body)
 end
 
 return _M
