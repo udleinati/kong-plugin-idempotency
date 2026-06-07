@@ -6,7 +6,7 @@ local kong = kong
 local ngx = ngx
 
 local Idempotency = {
-  VERSION = "1.2.0",
+  VERSION = "1.3.0",
   -- Low priority so the plugin runs after authentication: idempotency keys are
   -- namespaced per ACL user (see keys.lua) and the cached response belongs to
   -- the authenticated caller.

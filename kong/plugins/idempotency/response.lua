@@ -27,6 +27,15 @@ function _M.execute(conf, version, client)
     return
   end
 
+  local status = kong.service.response.get_status()
+
+  -- Do not cache server errors unless explicitly enabled: leave ctx.cached
+  -- unset so the log phase frees the lock and the client can retry.
+  if not conf.cache_5xx and status >= 500 then
+    cache.release(client)
+    return
+  end
+
   kong.response.set_header(STATUS_HEADER, "completed")
 
   if not client then
@@ -50,7 +59,7 @@ function _M.execute(conf, version, client)
 
   local payload = {
     headers = headers,
-    status = kong.service.response.get_status(),
+    status = status,
     body = kong.service.response.get_raw_body(),
   }
 

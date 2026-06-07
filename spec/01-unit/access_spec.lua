@@ -6,6 +6,12 @@ local VERSION = "1.2.0"
 local function conf(overrides)
   local c = {
     is_required = false,
+    methods = { "POST" },
+    -- off by default here so the key-format tests keep a stable lock value;
+    -- the dedicated "fingerprint" block turns it on.
+    verify_fingerprint = false,
+    cache_5xx = false,
+    fail_open = true,
     redis_cache_time = 86400,
     redis_prefix = "kong-idempotency-plugin",
     redis = {},
@@ -53,7 +59,11 @@ local function build(opts)
   }
 end
 
-local POST = { method = "POST", path = "/orders", host = "api.test", headers = { ["X-Idempotency-Key"] = "k1" } }
+local POST = { method = "POST", path = "/orders", host = "api.test", raw_body = "{}", headers = { ["X-Idempotency-Key"] = "k1" } }
+
+-- The fingerprint our fake ngx.md5 produces for the POST fixture (body "{}",
+-- empty query): md5(body .. "\0" .. query).
+local POST_FP = "md5(" .. "{}" .. "\0" .. "" .. ")"
 
 describe("idempotency access", function()
 
@@ -185,6 +195,75 @@ describe("idempotency access", function()
       assert.is_nil(ctx.recorded.exit)
       assert.is_false(ctx.plugin_ctx.store == true)
       assert.is_true(#ctx.recorded.logs > 0)
+    end)
+  end)
+
+  describe("fingerprint", function()
+    it("stores the request fingerprint as the lock value", function()
+      local ctx = build({ request = POST, redis = { set_return = "OK" } })
+      ctx.access.execute(conf({ verify_fingerprint = true }), VERSION, ctx.client)
+      assert.equal(POST_FP, ctx.red.calls.set[1].value)
+    end)
+
+    it("rejects a reused key carrying a different request with 422", function()
+      local ctx = build({ request = POST, redis = { set_return = "NULL", get_return = "a-different-fingerprint" } })
+      ctx.access.execute(conf({ verify_fingerprint = true }), VERSION, ctx.client)
+
+      assert.equal(422, ctx.recorded.exit.status)
+      assert.equal("conflict", ctx.recorded.response_headers["X-Idempotency-Status"])
+    end)
+
+    it("replays the cached response when the fingerprint matches", function()
+      local cached = cjson.encode({ status = 201, body = "created", headers = {} })
+      local ctx = build({
+        request = POST,
+        redis = {
+          set_return = "NULL",
+          get_fn = function(key)
+            return key:find(":lock:", 1, true) and POST_FP or cached
+          end,
+        },
+      })
+      ctx.access.execute(conf({ verify_fingerprint = true }), VERSION, ctx.client)
+
+      assert.equal(201, ctx.recorded.exit.status)
+      assert.equal("completed", ctx.recorded.response_headers["X-Idempotency-Status"])
+    end)
+  end)
+
+  describe("methods", function()
+    it("handles a configured non-POST method", function()
+      local request = { method = "PUT", path = "/orders", host = "api.test", raw_body = "{}",
+                        headers = { ["X-Idempotency-Key"] = "k1" } }
+      local ctx = build({ request = request, redis = { set_return = "OK" } })
+      ctx.access.execute(conf({ methods = { "POST", "PUT" } }), VERSION, ctx.client)
+
+      assert.equal(1, #ctx.red.calls.set)
+      assert.is_true(ctx.plugin_ctx.store)
+    end)
+
+    it("ignores a method that is not configured", function()
+      local request = { method = "PUT", path = "/orders", host = "api.test",
+                        headers = { ["X-Idempotency-Key"] = "k1" } }
+      local ctx = build({ request = request })
+      ctx.access.execute(conf({ methods = { "POST" } }), VERSION, ctx.client)
+
+      assert.equal(0, #ctx.red.calls.set)
+      assert.is_nil(ctx.recorded.exit)
+    end)
+  end)
+
+  describe("strict mode (fail_open=false)", function()
+    it("returns 503 when there is no Redis connection", function()
+      local ctx = build({ request = POST, no_client = true })
+      ctx.access.execute(conf({ fail_open = false }), VERSION, nil)
+      assert.equal(503, ctx.recorded.exit.status)
+    end)
+
+    it("returns 503 when the SET command errors", function()
+      local ctx = build({ request = POST, redis = { set_err = "timeout" } })
+      ctx.access.execute(conf({ fail_open = false }), VERSION, ctx.client)
+      assert.equal(503, ctx.recorded.exit.status)
     end)
   end)
 end)

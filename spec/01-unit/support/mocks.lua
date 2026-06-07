@@ -10,6 +10,8 @@ local M = {}
 function M.fake_ngx()
   return {
     null = setmetatable({}, { __tostring = function() return "ngx.null" end }),
+    -- deterministic md5 so specs can assert on the fingerprint content
+    md5 = function(str) return "md5(" .. tostring(str) .. ")" end,
     -- run the scheduled callback synchronously so specs can assert on its effect
     timer = {
       at = function(_, fn, ...)
@@ -48,6 +50,8 @@ function M.fake_kong(opts)
       get_path = function() return req.path or "/" end,
       get_host = function() return req.host or "example.test" end,
       get_header = function(name) return (req.headers or {})[name] end,
+      get_raw_body = function() return req.raw_body end,
+      get_raw_query = function() return req.query end,
     },
     client = {
       -- req.consumer is a table like { id = "c1" } or nil
@@ -81,6 +85,7 @@ function M.fake_kong(opts)
         end
         recorded.logs[#recorded.logs + 1] = table.concat(parts)
       end,
+      warn = function() end,
     },
   }
 
@@ -136,6 +141,7 @@ function M.fake_redis_client(opts)
   function red:get(key)
     self.calls.get[#self.calls.get + 1] = key
     if opts.get_err then return nil, opts.get_err end
+    if opts.get_fn then return opts.get_fn(key) end
     return opts.get_return
   end
 

@@ -15,24 +15,30 @@ double-clicks) without creating duplicate side effects.
 
 ### How it works
 
-For each eligible request the plugin uses an atomic Redis `SET key 1 NX EX <ttl>`
-to claim a per-key lock:
+For each eligible request the plugin uses an atomic Redis `SET key <fp> NX EX <ttl>`
+to claim a per-key lock (where `<fp>` is a fingerprint of the request):
 
 1. **First request wins the lock** → it is proxied normally. In the `response`
    phase the upstream status, body and headers are stored in Redis under a
-   `…-response` key with the configured TTL. The client gets the response with
-   `X-Idempotency-Status: completed`.
+   separate response key with the configured TTL. The client gets the response
+   with `X-Idempotency-Status: completed`.
 2. **A duplicate arrives while the first is still in flight** (lock held, no
    cached response yet) → the client gets `409` with
    `X-Idempotency-Status: waiting_response`, signalling it to retry shortly.
 3. **A duplicate arrives after the first finished** → the cached response is
    replayed verbatim with `X-Idempotency-Status: completed`.
+4. **The same key is reused with a different request** (when
+   `verify_fingerprint` is on) → the client gets `422` with
+   `X-Idempotency-Status: conflict`; the request is neither processed nor
+   replayed.
 
 Keys are namespaced as
-`[<redis-username>::]<redis_prefix>:<consumer>:<host>:<path>:<method>:<key>`
+`[<redis-username>::]<redis_prefix>:<consumer>:<host>:<path>:<method>:{lock|resp}:<key>`
 (where `<consumer>` is the authenticated consumer id, or `anonymous`). This scope
 ensures the same client-supplied key cannot collide — and leak responses —
-across different consumers, hosts or endpoints sharing one Redis instance.
+across different consumers, hosts or endpoints sharing one Redis instance. The
+fingerprint (md5 of the request body + query string) detects key reuse with a
+different request.
 
 > **Resilience:** if Redis is unreachable the plugin *fails open* — the request
 > is proxied normally (a warning is logged) rather than taking the protected
@@ -72,6 +78,10 @@ $ curl -X POST http://kong:8000/orders \
 | Parameter | default | description |
 | ---       | ---     | ---         |
 | `config.is_required` | `false` | When `false`, requests without an `X-Idempotency-Key` are passed through untouched. When `true`, such requests are rejected with `400`. |
+| `config.methods` | `["POST"]` | HTTP methods the plugin applies idempotency to. Allowed: `POST`, `PUT`, `PATCH`, `DELETE`. |
+| `config.verify_fingerprint` | `true` | Store a fingerprint (md5 of body + query) with the key and reject (`422`) when the same key is reused with a different request, instead of replaying the original response. |
+| `config.cache_5xx` | `false` | When `false`, `5xx` responses are not cached and the lock is released, so the client can retry after a transient server error. |
+| `config.fail_open` | `true` | When `true`, a Redis outage lets requests through (idempotency guarantee lost). When `false`, such requests are rejected with `503`. |
 | `config.redis_cache_time` | `86400` | TTL of the idempotency lock and the cached response — i.e. the window during which a key is treated as a duplicate. Whole seconds (integer), must be > 0. |
 | `config.redis_prefix` | `kong-idempotency-plugin` | Namespace prepended to every Redis key. |
 | `config.redis.host` | | **Mandatory.** Redis host. |
@@ -95,6 +105,7 @@ $ curl -X POST http://kong:8000/orders \
 | --- | --- | --- |
 | `X-Idempotency-Status` | `completed` | The response is the (cached or freshly produced) result for this key. |
 | `X-Idempotency-Status` | `waiting_response` | The original request for this key is still in flight (returned with `409`). |
+| `X-Idempotency-Status` | `conflict` | The key was reused with a different request (returned with `422`). |
 
 ## Development & Testing
 
@@ -132,11 +143,9 @@ Compose) is also provided.
   slightly different times with independent TTLs, so a duplicate arriving in a
   narrow window (~the original's processing time, roughly one TTL later) could
   reprocess despite a cached response.
-- **Caching of error responses.** A response that *is* produced is cached for any
-  status code, so a transient upstream `5xx` becomes "sticky" for the window.
-  Restricting caching to, say, `2xx`/`4xx` could be made configurable.
-- **Methods beyond POST.** Idempotency keys are also useful for `PUT`/`PATCH`/
-  `DELETE`; the plugin is intentionally `POST`-only today.
+- **Error responses.** `5xx` responses are not cached by default (`cache_5xx`),
+  so a transient server error does not become "sticky". `4xx` responses are
+  cached (a deterministic client error replays safely).
 - **Key scope.** A key is scoped to the authenticated consumer (or `anonymous`),
   request host, path and method (plus the static Redis username). Retries of the
   *same* operation by the *same* caller are idempotent; the same key on a

@@ -29,6 +29,26 @@ return {
         -- untouched; when true, such requests are rejected with 400.
         { is_required = { type = "boolean", default = false }, },
 
+        -- HTTP methods the plugin applies idempotency to.
+        { methods = {
+            type = "array",
+            required = true,
+            default = { "POST" },
+            elements = { type = "string", one_of = { "POST", "PUT", "PATCH", "DELETE" } },
+        }, },
+
+        -- Reject (instead of replaying) when the same key is reused with a
+        -- different request. Stores an md5 of the body + query as the lock value.
+        { verify_fingerprint = { type = "boolean", required = true, default = true }, },
+
+        -- When false, a 5xx response is not cached, so the lock is released and
+        -- the client can retry after a transient server error.
+        { cache_5xx = { type = "boolean", required = true, default = false }, },
+
+        -- When true (default), a Redis outage lets requests through (the
+        -- idempotency guarantee is lost). When false, they are rejected with 503.
+        { fail_open = { type = "boolean", required = true, default = true }, },
+
         -- TTL (seconds) of both the idempotency lock and the cached response,
         -- i.e. the window during which a key is considered a duplicate.
         -- Integer: Redis `SET ... EX` only accepts whole seconds.

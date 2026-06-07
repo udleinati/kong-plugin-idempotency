@@ -5,6 +5,7 @@ local VERSION = "1.2.0"
 
 local function conf(overrides)
   local c = {
+    cache_5xx = false,
     redis_cache_time = 86400,
     redis_prefix = "kong-idempotency-plugin",
     redis = {},
@@ -104,5 +105,25 @@ describe("idempotency response", function()
 
     assert.equal("completed", ctx.recorded.response_headers["X-Idempotency-Status"])
     assert.is_true(#ctx.recorded.logs > 0)
+  end)
+
+  describe("5xx caching", function()
+    it("does not cache a 5xx response by default (lock left to be released)", function()
+      local ctx = build({ response = { status = 502, body = "bad gateway", headers = {} } })
+      ctx.response.execute(conf({ cache_5xx = false }), VERSION, ctx.client)
+
+      assert.equal(0, #ctx.red.calls.set, "a 5xx must not be cached")
+      assert.is_nil(ctx.plugin_ctx.cached, "ctx.cached stays unset so the log phase frees the lock")
+      assert.is_nil(ctx.recorded.response_headers["X-Idempotency-Status"])
+      assert.equal(1, #ctx.cache_calls.release)
+    end)
+
+    it("caches a 5xx response when cache_5xx is enabled", function()
+      local ctx = build({ response = { status = 502, body = "bad gateway", headers = {} }, redis = { set_return = "OK" } })
+      ctx.response.execute(conf({ cache_5xx = true }), VERSION, ctx.client)
+
+      assert.equal(1, #ctx.red.calls.set)
+      assert.is_true(ctx.plugin_ctx.cached)
+    end)
   end)
 end)

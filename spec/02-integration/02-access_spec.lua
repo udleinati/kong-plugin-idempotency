@@ -16,6 +16,10 @@ end
 local function response_key(path, idem)
   return PREFIX .. ":anonymous:" .. HOST .. ":" .. path .. ":POST:resp:" .. idem
 end
+-- Mirror the plugin's fingerprint: md5(raw_body .. "\0" .. query).
+local function fingerprint(body, query)
+  return ngx.md5((body or "") .. "\0" .. (query or ""))
+end
 
 local function redis_connect()
   local red = redis:new()
@@ -145,10 +149,10 @@ for _, strategy in helpers.each_strategy() do
     end)
 
     it("returns 409 while the original request is still in flight", function()
-      -- Seed only the lock (no cached response yet) to simulate an in-flight
-      -- original request.
+      -- Seed only the lock (with the matching fingerprint, no cached response
+      -- yet) to simulate an in-flight original request.
       local red = redis_connect()
-      assert(red:set(lock_key("/echo", "inflight-1"), "1", "EX", 60))
+      assert(red:set(lock_key("/echo", "inflight-1"), fingerprint("{}", ""), "EX", 60))
       red:close()
 
       local res = proxy_client:post("/echo", {
@@ -157,6 +161,23 @@ for _, strategy in helpers.each_strategy() do
       })
       assert.response(res).has.status(409)
       assert.equal("waiting_response", header(res, "X-Idempotency-Status"))
+    end)
+
+    it("rejects a reused key carrying a different body with 422", function()
+      local res1 = proxy_client:post("/echo", {
+        headers = { host = HOST, ["X-Idempotency-Key"] = "conf-1", ["Content-Type"] = "application/json" },
+        body = '{"amount":1}',
+      })
+      assert.response(res1).has.status(200)
+      proxy_client:close()
+
+      proxy_client = helpers.proxy_client()
+      local res2 = proxy_client:post("/echo", {
+        headers = { host = HOST, ["X-Idempotency-Key"] = "conf-1", ["Content-Type"] = "application/json" },
+        body = '{"amount":999}',
+      })
+      assert.response(res2).has.status(422)
+      assert.equal("conflict", header(res2, "X-Idempotency-Status"))
     end)
 
     it("rejects a required-key request that omits the key", function()
