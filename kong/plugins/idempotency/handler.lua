@@ -2,7 +2,7 @@ local access = require "kong.plugins.idempotency.access"
 local response = require "kong.plugins.idempotency.response"
 
 local Idempotency = {
-  VERSION = "1.1.2",
+  VERSION = "1.1.3",
   PRIORITY = -1
 }
 
