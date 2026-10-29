@@ -1,8 +1,9 @@
 local json = require "cjson"
+local cache = require "kong.plugins.idempotency.cache"
 local kong = kong
 local _M = {}
 
-function _M.execute(conf, version, client)
+function _M.execute(conf, version)
   local method = kong.request.get_method()
   local path = kong.request.get_path()
   local idempotency_key = kong.request.get_header('X-Idempotency-Key')
@@ -44,7 +45,11 @@ function _M.execute(conf, version, client)
 
   -- resty.redis syntax for SET with EX and NX:
   -- client:set(key, value, "EX", ttl)
+  local client = cache.connection(conf)
+
   local ok, err = client:set(redis_key, json.encode(payload), "EX", conf.redis_cache_time)
+
+  cache.release(client)
 
   if not ok then
     kong.log.err("Failed to write idempotency cache to Redis: ", err)

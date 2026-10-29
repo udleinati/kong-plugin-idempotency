@@ -1,8 +1,9 @@
 local json = require "cjson"
+local cache = require "kong.plugins.idempotency.cache"
 local kong = kong
 local _M = {}
 
-function _M.execute(conf, version, client)
+function _M.execute(conf, version)
   local method = kong.request.get_method()
   local path = kong.request.get_path()
 
@@ -39,15 +40,20 @@ function _M.execute(conf, version, client)
   -- resty.redis syntax:
   -- client:set(key, value, "EX", ttl, "NX")
   -------------------------------------------------------------
+  -- Only connect to Redis for requests that actually need it
+  local client = cache.connection(conf)
+
   local ok, err = client:set(idem_key, true, "EX", conf.redis_cache_time, "NX")
 
   if err then
     kong.log.err("Redis SET NX failed: ", err)
+    cache.release(client)
     return
   end
 
   -- If ok == OK -> first request -> wait until response.lua stores full response
   if ok == "OK" then
+    cache.release(client)
     kong.response.set_header("X-Idempotency-Status", "waiting_response")
     return
   end
@@ -56,14 +62,17 @@ function _M.execute(conf, version, client)
   -- 2. Key already exists -> fetch cached response
   -------------------------------------------------------------
   local response_key = string.format("%s:%s-response", prefix_redis_key, idempotency_key)
-  local cache, err = client:get(response_key)
+  local cached, err = client:get(response_key)
+
+  -- Release before kong.response.exit, which does not return in the access phase
+  cache.release(client)
 
   if err then
     kong.log.err("Redis GET failed: ", err)
   end
 
   -- resty.redis returns ngx.null if key doesn't exist
-  if cache == ngx.null or not cache then
+  if cached == ngx.null or not cached then
     kong.response.set_header("X-Idempotency-Status", "waiting_response")
     kong.response.exit(409, { message = "X-Idempotency-Status waiting_response" })
     return
@@ -72,7 +81,7 @@ function _M.execute(conf, version, client)
   -------------------------------------------------------------
   -- 3. Decode cached payload
   -------------------------------------------------------------
-  local response = json.decode(cache)
+  local response = json.decode(cached)
 
   -- restore headers from the original response
   for name, value in pairs(response.headers or {}) do
